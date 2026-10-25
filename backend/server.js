@@ -86,6 +86,21 @@ function mapRowToCustomField(row) {
 
 // ----------------- REST API Endpoints -----------------
 
+// 0. Welcome & Root Endpoint
+app.get(['/', '/api'], (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Nifas Silk-Lafto Beneficiary and Fayda Registry API is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      beneficiaries: '/api/beneficiaries',
+      customFields: '/api/custom-fields',
+      auth: '/api/auth/me'
+    }
+  });
+});
+
 // 1. Health Check
 app.get('/api/health', async (req, res) => {
   try {
@@ -541,6 +556,14 @@ app.get('/api/auth/me', async (req, res) => {
 // 13. Authentication: Logout
 app.post('/api/auth/logout', (_req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// 404 Catch-All Handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Cannot ${req.method} ${req.originalUrl}. Visit / for available endpoints.`
+  });
 });
 
 // ----------------- Server Start -----------------
