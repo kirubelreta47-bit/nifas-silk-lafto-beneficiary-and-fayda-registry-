@@ -7,7 +7,7 @@ import { AdminLoginPage } from './components/AdminLoginPage';
 import { BeneficiaryRecord, CustomFormField, AdminUser } from './types/registry';
 import { INITIAL_BENEFICIARIES, INITIAL_CUSTOM_FIELDS } from './data/initialRecords';
 import { CivicEmblem } from './components/CivicEmblem';
-import { ShieldCheck, Phone, Mail, MapPin } from 'lucide-react';
+import { ShieldCheck, Phone, Mail, MapPin, AlertCircle, RefreshCw } from 'lucide-react';
 import {
   fetchBeneficiariesApi,
   createBeneficiaryApi,
@@ -18,13 +18,9 @@ import {
   deleteCustomFieldApi,
   reorderCustomFieldsApi,
   resetDemoDataApi,
-  checkDatabaseHealth,
   getCurrentAdminApi,
   logoutAdminApi
 } from './services/api';
-
-const STORAGE_KEY_RECORDS = 'nsl_beneficiaries_registry_v1';
-const STORAGE_KEY_CUSTOM_FIELDS = 'nsl_custom_form_fields_v1';
 
 const getInitialRoute = (): 'public' | 'admin' => {
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
@@ -36,67 +32,40 @@ const getInitialRoute = (): 'public' | 'admin' => {
 export default function App() {
   const [currentView, setCurrentView] = useState<'public' | 'admin'>(getInitialRoute);
   const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(null);
-  const [isDbConnected, setIsDbConnected] = useState(false);
+  const [records, setRecords] = useState<BeneficiaryRecord[]>(INITIAL_BENEFICIARIES);
+  const [customFields, setCustomFields] = useState<CustomFormField[]>(INITIAL_CUSTOM_FIELDS);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Load beneficiaries from localStorage or fall back to pre-populated records
-  const [records, setRecords] = useState<BeneficiaryRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_RECORDS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse saved records from localStorage', e);
-    }
-    return INITIAL_BENEFICIARIES;
-  });
-
-  // Load custom form fields from localStorage or fall back to defaults
-  const [customFields, setCustomFields] = useState<CustomFormField[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_CUSTOM_FIELDS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to parse saved custom fields from localStorage', e);
-    }
-    return INITIAL_CUSTOM_FIELDS;
-  });
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Modal for recent submission confirmation
   const [recentSubmission, setRecentSubmission] = useState<BeneficiaryRecord | null>(null);
 
-  // Sync to database on mount
-  const syncWithDatabase = useCallback(async () => {
+  // Load real data from backend API
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setFetchError(null);
     try {
-      const isHealthy = await checkDatabaseHealth();
-      setIsDbConnected(isHealthy);
-      if (isHealthy) {
-        const [dbRecords, dbFields] = await Promise.all([
-          fetchBeneficiariesApi(),
-          fetchCustomFieldsApi()
-        ]);
-        if (Array.isArray(dbRecords) && dbRecords.length > 0) {
-          setRecords(dbRecords);
-        }
-        if (Array.isArray(dbFields) && dbFields.length > 0) {
-          setCustomFields(dbFields);
-        }
+      const [dbRecords, dbFields] = await Promise.all([
+        fetchBeneficiariesApi(),
+        fetchCustomFieldsApi()
+      ]);
+      if (Array.isArray(dbRecords)) {
+        setRecords(dbRecords);
       }
-    } catch (err) {
-      console.warn('Database sync warning, using local fallback:', err);
+      if (Array.isArray(dbFields) && dbFields.length > 0) {
+        setCustomFields(dbFields);
+      }
+    } catch (err: any) {
+      console.error('Failed to load data from server:', err);
+      setFetchError(err.message || 'ከዳታቤዝ መረጃ ማምጣት አልተቻለም');
     } finally {
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Check for active admin session on mount
   useEffect(() => {
@@ -141,123 +110,78 @@ export default function App() {
     navigateView('public');
   };
 
-  // Sync to localStorage as offline cache
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
-    } catch (e) {
-      console.error('Error saving records to localStorage', e);
-    }
-  }, [records]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_CUSTOM_FIELDS, JSON.stringify(customFields));
-    } catch (e) {
-      console.error('Error saving custom fields to localStorage', e);
-    }
-  }, [customFields]);
-
-  // Calculate next Serial ID
+  // Calculate next Serial ID for display
   const nextId = records.length > 0
     ? Math.max(...records.map((r) => r.id || 0)) + 1
     : 1;
 
-  // Add Beneficiary Handler (with direct PostgreSQL sync)
+  // Add Beneficiary Handler (direct database call)
   const handleAddRecord = async (recordData: Omit<BeneficiaryRecord, 'id'>) => {
     try {
       const created = await createBeneficiaryApi(recordData);
       setRecords((prev) => [created, ...prev.filter((r) => r.id !== created.id)]);
       setRecentSubmission(created);
-      setIsDbConnected(true);
-      return;
     } catch (err: any) {
-      console.warn('Direct database save error:', err);
-      if (err.message && (err.message.includes('ፋይዳ') || err.message.includes('Fayda') || err.message.includes('ቀደም'))) {
-        alert(err.message);
-        return;
-      }
-      // If network/offline, save to local cache
-      const newRecord: BeneficiaryRecord = {
-        ...recordData,
-        id: nextId
-      };
-      setRecords((prev) => [newRecord, ...prev]);
-      setRecentSubmission(newRecord);
+      console.error('Registration failed:', err);
+      alert(err.message || 'ምዝገባው አልተሳካም። እባክዎ እንደገና ይሞክሩ።');
     }
   };
 
   // Update Beneficiary Handler
   const handleUpdateRecord = async (updated: BeneficiaryRecord) => {
-    if (isDbConnected) {
-      try {
-        const saved = await updateBeneficiaryApi(updated);
-        setRecords((prev) => prev.map((r) => (r.id === saved.id ? saved : r)));
-        return;
-      } catch (err) {
-        console.error('Database update failed, updating locally:', err);
-      }
+    try {
+      const saved = await updateBeneficiaryApi(updated);
+      setRecords((prev) => prev.map((r) => (r.id === saved.id ? saved : r)));
+    } catch (err: any) {
+      console.error('Update failed:', err);
+      alert(err.message || 'መረጃውን ማደስ አልተሳካም');
     }
-    setRecords((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
   };
 
   // Delete Beneficiary Handler
   const onDeleteRecord = async (id: number) => {
-    if (isDbConnected) {
-      try {
-        await deleteBeneficiaryApi(id);
-      } catch (err) {
-        console.error('Database delete failed, deleting locally:', err);
-      }
+    try {
+      await deleteBeneficiaryApi(id);
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      alert(err.message || 'መረጃውን መሰረዝ አልተሳካም');
     }
-    setRecords((prev) => prev.filter((r) => r.id !== id));
   };
 
   // Reset Demo Data
   const handleResetDemoData = async () => {
     if (window.confirm('ሁሉንም መረጃዎች ወደ መጀመሪያው የንፋስ ስልክ ላፍቶ ናሙና መረጃዎች መመለስ ይፈልጋሉ? (Reset all records in database?)')) {
-      if (isDbConnected) {
-        try {
-          const res = await resetDemoDataApi();
-          setRecords(res.records);
-          setCustomFields(res.customFields);
-          localStorage.removeItem(STORAGE_KEY_RECORDS);
-          localStorage.removeItem(STORAGE_KEY_CUSTOM_FIELDS);
-          return;
-        } catch (err) {
-          console.error('Failed to reset demo data in database:', err);
-        }
+      try {
+        const res = await resetDemoDataApi();
+        setRecords(res.records);
+        setCustomFields(res.customFields);
+      } catch (err: any) {
+        console.error('Failed to reset demo data:', err);
+        alert(err.message || 'ናሙና ዳታዎችን መመለስ አልተቻለም');
       }
-      setRecords(INITIAL_BENEFICIARIES);
-      setCustomFields(INITIAL_CUSTOM_FIELDS);
-      localStorage.removeItem(STORAGE_KEY_RECORDS);
-      localStorage.removeItem(STORAGE_KEY_CUSTOM_FIELDS);
     }
   };
 
   // Custom Field Management
   const handleAddField = async (newField: CustomFormField) => {
-    if (isDbConnected) {
-      try {
-        const created = await createCustomFieldApi(newField);
-        setCustomFields((prev) => [...prev, created]);
-        return;
-      } catch (err) {
-        console.error('Failed to create field in database:', err);
-      }
+    try {
+      const created = await createCustomFieldApi(newField);
+      setCustomFields((prev) => [...prev, created]);
+    } catch (err: any) {
+      console.error('Create field failed:', err);
+      alert(err.message || 'አዲስ ቅጽ መጨመር አልተሳካም');
     }
-    setCustomFields((prev) => [...prev, newField]);
   };
 
   const handleDeleteField = async (id: string) => {
-    if (isDbConnected) {
-      try {
-        await deleteCustomFieldApi(id);
-      } catch (err) {
-        console.error('Failed to delete field in database:', err);
-      }
+    try {
+      await deleteCustomFieldApi(id);
+      setCustomFields((prev) => prev.filter((f) => f.id !== id));
+    } catch (err: any) {
+      console.error('Delete field failed:', err);
+      alert(err.message || 'ቅጹን መሰረዝ አልተሳካም');
     }
-    setCustomFields((prev) => prev.filter((f) => f.id !== id));
   };
 
   const handleMoveField = async (index: number, direction: 'up' | 'down') => {
@@ -268,13 +192,10 @@ export default function App() {
       next[index] = next[targetIndex];
       next[targetIndex] = temp;
       setCustomFields(next);
-
-      if (isDbConnected) {
-        try {
-          await reorderCustomFieldsApi(next.map((f) => f.id));
-        } catch (err) {
-          console.error('Failed to reorder fields in database:', err);
-        }
+      try {
+        await reorderCustomFieldsApi(next.map((f) => f.id));
+      } catch (err: any) {
+        console.error('Failed to reorder fields in database:', err);
       }
     }
   };
@@ -296,28 +217,41 @@ export default function App() {
         currentView={currentView}
         onViewChange={navigateView}
         totalRecordsCount={records.length}
-        isDbConnected={isDbConnected}
         currentUser={currentAdmin}
         onLogout={handleLogout}
-        onRefreshConnection={syncWithDatabase}
       />
+
+      {/* Connection Error Banner if Backend is down */}
+      {fetchError && (
+        <div className="bg-rose-50 border-b border-rose-200 text-rose-800 px-4 py-2 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{fetchError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={loadData}
+            className="flex items-center gap-1 font-bold underline hover:text-rose-950 cursor-pointer"
+          >
+            <RefreshCw className="w-3 h-3" /> እንደገና ሞክር (Retry)
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 pb-16">
         {currentView === 'public' ? (
           <RegistrationForm
-            customFields={customFields}
             onSubmit={handleAddRecord}
-            nextId={nextId}
+            customFields={customFields}
+            nextSerialId={nextId}
           />
         ) : (
           <AdminPortal
             records={records}
             customFields={customFields}
-            onAddRecord={handleAddRecord}
             onUpdateRecord={handleUpdateRecord}
             onDeleteRecord={onDeleteRecord}
-            onResetDemoData={handleResetDemoData}
             onAddField={handleAddField}
             onDeleteField={handleDeleteField}
             onMoveField={handleMoveField}

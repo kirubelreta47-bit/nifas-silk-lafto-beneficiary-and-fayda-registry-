@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const { query, initDatabase, pool } = require('./db');
+const { query, initDatabase } = require('./db');
 const { INITIAL_BENEFICIARIES, INITIAL_CUSTOM_FIELDS } = require('./initialData');
 
 const app = express();
@@ -11,28 +11,13 @@ const PORT = process.env.PORT || 5000;
 const AUTH_SECRET = process.env.AUTH_SECRET || 'nsl-subcity-auth-secret-key-2024';
 
 // ----------------- CORS Configuration -----------------
-const allowedOrigins = process.env.CORS_ORIGIN 
-  ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
-  : ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000', 'http://127.0.0.1:5173'];
-
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, server-to-server) or from allowed origins or local networks
-    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
-      return callback(null, true);
-    }
-    return callback(null, true); // Permissive default to avoid deployment headaches
-  },
-  credentials: true,
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.json());
-
-// In-memory fallback if PostgreSQL is not connected
-let memoryBeneficiaries = [...INITIAL_BENEFICIARIES];
-let memoryCustomFields = [...INITIAL_CUSTOM_FIELDS];
 
 // ----------------- Auth Token Helper -----------------
 function createSessionToken(user) {
@@ -41,7 +26,7 @@ function createSessionToken(user) {
     username: user.username,
     role: user.role,
     woreda: user.woreda,
-    exp: Date.now() + 24 * 60 * 60 * 1000
+    exp: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
   };
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const sig = crypto.createHmac('sha256', AUTH_SECRET).update(body).digest('base64url');
@@ -63,7 +48,7 @@ function verifySessionToken(token) {
   }
 }
 
-// ----------------- Data Mappers -----------------
+// ----------------- Row Mappers (PostgreSQL -> Frontend) -----------------
 function mapRowToBeneficiary(row) {
   return {
     id: row.id,
@@ -99,61 +84,31 @@ function mapRowToCustomField(row) {
   };
 }
 
-// ----------------- API Routes -----------------
+// ----------------- REST API Endpoints -----------------
 
 // 1. Health Check
 app.get('/api/health', async (req, res) => {
   try {
-    if (pool) {
-      const dbRes = await query('SELECT NOW() as now;');
-      return res.json({
-        status: 'ok',
-        database: 'connected',
-        serverTime: dbRes.rows[0].now,
-        environment: process.env.NODE_ENV || 'development'
-      });
-    }
-    return res.json({
+    const dbRes = await query('SELECT NOW() as now;');
+    res.json({
       status: 'ok',
-      database: 'in-memory-fallback',
-      serverTime: new Date().toISOString()
+      database: 'connected',
+      serverTime: dbRes.rows[0].now,
+      environment: process.env.NODE_ENV || 'production'
     });
   } catch (err) {
-    res.status(503).json({
-      status: 'degraded',
+    res.status(500).json({
+      status: 'error',
       database: 'disconnected',
       error: err.message
     });
   }
 });
 
-// 2. GET /api/beneficiaries (Supports search & filters for woreda, healthStatus, category)
+// 2. Beneficiaries: GET /api/beneficiaries (search & filter support)
 app.get('/api/beneficiaries', async (req, res) => {
   try {
     const { search, woreda, healthStatus, category } = req.query;
-
-    if (!pool) {
-      let filtered = [...memoryBeneficiaries];
-      if (search) {
-        const q = String(search).toLowerCase();
-        filtered = filtered.filter(b => 
-          b.fullName.toLowerCase().includes(q) ||
-          b.faydaId.includes(q) ||
-          b.phone.includes(q) ||
-          (b.locality && b.locality.toLowerCase().includes(q))
-        );
-      }
-      if (woreda && woreda !== 'ሁሉም ወረዳዎች') {
-        filtered = filtered.filter(b => b.woreda === woreda);
-      }
-      if (healthStatus && healthStatus !== 'ሁሉም የጤና ሁኔታዎች') {
-        filtered = filtered.filter(b => b.healthStatus === healthStatus);
-      }
-      if (category && category !== 'ሁሉም መደቦች') {
-        filtered = filtered.filter(b => b.category === category);
-      }
-      return res.json(filtered);
-    }
 
     const conditions = [];
     const values = [];
@@ -189,45 +144,45 @@ app.get('/api/beneficiaries', async (req, res) => {
     const sql = `SELECT * FROM beneficiaries ${whereClause} ORDER BY id DESC;`;
 
     const result = await query(sql, values);
-    const beneficiaries = result.rows.map(mapRowToBeneficiary);
-    res.json(beneficiaries);
+    res.json(result.rows.map(mapRowToBeneficiary));
   } catch (err) {
-    console.error('Error in GET /api/beneficiaries:', err);
-    res.status(500).json({ error: 'Failed to fetch beneficiaries' });
+    console.error('Error fetching beneficiaries:', err);
+    res.status(500).json({ error: 'Failed to fetch beneficiaries from database' });
   }
 });
 
-// 3. POST /api/beneficiaries (Register a new beneficiary)
+// 3. Beneficiaries: POST /api/beneficiaries (Register a new beneficiary)
 app.post('/api/beneficiaries', async (req, res) => {
   try {
     const b = req.body;
     if (!b.fullName || !b.faydaId || !b.phone) {
-      return res.status(400).json({ error: 'Full name, Fayda ID, and phone number are required' });
+      return res.status(400).json({ error: 'ሙሉ ስም፣ የፋይዳ መታወቂያ እና ስልክ ቁጥር ማስገባት ግዴታ ነው (Full name, Fayda ID, and phone are required)' });
     }
 
     const cleanFayda = String(b.faydaId).trim();
 
-    if (!pool) {
-      const exists = memoryBeneficiaries.some(item => item.faydaId === cleanFayda);
-      if (exists) {
-        return res.status(409).json({ error: 'ይህ የፋይዳ ቁጥር ቀደም ሲል ተመዝግቧል (Fayda ID already registered)' });
-      }
-      const newId = memoryBeneficiaries.length > 0 ? Math.max(...memoryBeneficiaries.map(x => x.id || 0)) + 1 : 1;
-      const created = {
-        ...b,
-        id: newId,
-        faydaId: cleanFayda,
-        registrationDate: b.registrationDate || new Date().toISOString().split('T')[0]
-      };
-      memoryBeneficiaries.unshift(created);
-      return res.status(201).json(created);
-    }
-
-    // Check for duplicate Fayda ID in database
+    // Check duplicate Fayda ID in database
     const existing = await query('SELECT id FROM beneficiaries WHERE fayda_id = $1 LIMIT 1;', [cleanFayda]);
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'ይህ የፋይዳ ቁጥር ቀደም ሲል ተመዝግቧል (Fayda ID already registered)' });
+      return res.status(409).json({ error: 'ይህ የፋይዳ ቁጥር ቀደም ሲል ተመዝግቧል (Fayda ID is already registered)' });
     }
+
+    const fullName = String(b.fullName).trim();
+    const subCity = b.subCity || 'ንፋስ ስልክ ላፍቶ';
+    const woreda = b.woreda || 'ለቡ 01';
+    const blockZone = b.blockZone || 'ቀጠና 1';
+    const locality = b.locality ? String(b.locality).trim() : '';
+    const houseNo = b.houseNo ? String(b.houseNo).trim() : '';
+    const gender = b.gender || 'ወ';
+    const age = Number(b.age) || 0;
+    const healthStatus = b.healthStatus || 'ጤነኛ';
+    const familyMale = Number(b.familyMale) || 0;
+    const familyFemale = Number(b.familyFemale) || 0;
+    const familyTotal = Number(b.familyTotal) || (familyMale + familyFemale);
+    const phone = String(b.phone).trim();
+    const category = b.category || 'በቀጣይነት የሚረዱ';
+    const registrationDate = b.registrationDate || new Date().toISOString().split('T')[0];
+    const customFields = typeof b.customFields === 'object' && b.customFields !== null ? b.customFields : {};
 
     const result = await query(
       `
@@ -240,48 +195,39 @@ app.post('/api/beneficiaries', async (req, res) => {
       RETURNING *;
       `,
       [
-        b.fullName,
-        b.subCity || 'ንፋስ ስልክ ላፍቶ',
-        b.woreda || 'ለቡ 01',
-        b.blockZone || 'ቀጠና 1',
-        b.locality || '',
-        b.houseNo || '',
+        fullName,
+        subCity,
+        woreda,
+        blockZone,
+        locality,
+        houseNo,
         cleanFayda,
-        b.gender || 'ወ',
-        Number(b.age) || 0,
-        b.healthStatus || 'ጤነኛ',
-        Number(b.familyMale) || 0,
-        Number(b.familyFemale) || 0,
-        Number(b.familyTotal) || 0,
-        b.phone,
-        b.category || 'በቀጣይነት የሚረዱ',
-        b.registrationDate || new Date().toISOString().split('T')[0],
-        JSON.stringify(b.customFields || {})
+        gender,
+        age,
+        healthStatus,
+        familyMale,
+        familyFemale,
+        familyTotal,
+        phone,
+        category,
+        registrationDate,
+        JSON.stringify(customFields)
       ]
     );
 
     const saved = mapRowToBeneficiary(result.rows[0]);
     res.status(201).json(saved);
   } catch (err) {
-    console.error('Error creating beneficiary:', err);
-    res.status(500).json({ error: err.message || 'Failed to create beneficiary' });
+    console.error('Error inserting beneficiary to PostgreSQL:', err);
+    res.status(500).json({ error: err.message || 'Failed to save beneficiary to database' });
   }
 });
 
-// 4. PUT /api/beneficiaries/:id (Update beneficiary record)
+// 4. Beneficiaries: PUT /api/beneficiaries/:id (Update beneficiary)
 app.put('/api/beneficiaries/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const b = req.body;
-
-    if (!pool) {
-      const idx = memoryBeneficiaries.findIndex(x => x.id === id);
-      if (idx === -1) {
-        return res.status(404).json({ error: 'Beneficiary not found' });
-      }
-      memoryBeneficiaries[idx] = { ...memoryBeneficiaries[idx], ...b, id };
-      return res.json(memoryBeneficiaries[idx]);
-    }
 
     const result = await query(
       `
@@ -309,7 +255,7 @@ app.put('/api/beneficiaries/:id', async (req, res) => {
       `,
       [
         b.fullName,
-        b.subCity,
+        b.subCity || 'ንፋስ ስልክ ላፍቶ',
         b.woreda,
         b.blockZone,
         b.locality || '',
@@ -329,68 +275,65 @@ app.put('/api/beneficiaries/:id', async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Beneficiary not found' });
+      return res.status(404).json({ error: 'Beneficiary record not found' });
     }
 
     res.json(mapRowToBeneficiary(result.rows[0]));
   } catch (err) {
-    console.error('Error updating beneficiary:', err);
-    res.status(500).json({ error: 'Failed to update beneficiary' });
+    console.error('Error updating beneficiary in PostgreSQL:', err);
+    res.status(500).json({ error: 'Failed to update beneficiary in database' });
   }
 });
 
-// 5. DELETE /api/beneficiaries/:id (Delete beneficiary record)
+// 5. Beneficiaries: DELETE /api/beneficiaries/:id (Delete beneficiary)
 app.delete('/api/beneficiaries/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-
-    if (!pool) {
-      memoryBeneficiaries = memoryBeneficiaries.filter(x => x.id !== id);
-      return res.json({ success: true, id });
-    }
-
     const result = await query('DELETE FROM beneficiaries WHERE id = $1 RETURNING id;', [id]);
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Beneficiary not found' });
+      return res.status(404).json({ error: 'Beneficiary record not found' });
     }
     res.json({ success: true, id });
   } catch (err) {
-    console.error('Error deleting beneficiary:', err);
-    res.status(500).json({ error: 'Failed to delete beneficiary' });
+    console.error('Error deleting beneficiary from PostgreSQL:', err);
+    res.status(500).json({ error: 'Failed to delete beneficiary from database' });
   }
 });
 
-// 6. GET /api/custom-fields (Dynamic form builder fields)
+// 6. Custom Fields: GET /api/custom-fields
 app.get('/api/custom-fields', async (req, res) => {
   try {
-    if (!pool) {
-      return res.json(memoryCustomFields);
-    }
-    const result = await query('SELECT * FROM custom_form_fields ORDER BY sort_order ASC, created_at ASC;');
+    const result = await query('SELECT * FROM custom_fields ORDER BY sort_order ASC, created_at ASC;');
     res.json(result.rows.map(mapRowToCustomField));
   } catch (err) {
-    console.error('Error fetching custom fields:', err);
-    res.status(500).json({ error: 'Failed to fetch custom form fields' });
+    // Fallback to custom_form_fields if exists
+    try {
+      const fallback = await query('SELECT * FROM custom_form_fields ORDER BY sort_order ASC, created_at ASC;');
+      return res.json(fallback.rows.map(mapRowToCustomField));
+    } catch {
+      res.status(500).json({ error: 'Failed to fetch custom fields' });
+    }
   }
 });
 
-// 7. POST /api/custom-fields (Create custom field)
+// 7. Custom Fields: POST /api/custom-fields
 app.post('/api/custom-fields', async (req, res) => {
   try {
     const f = req.body;
-    if (!pool) {
-      const newField = { ...f, sortOrder: memoryCustomFields.length };
-      memoryCustomFields.push(newField);
-      return res.status(201).json(newField);
-    }
-
-    const maxOrder = await query('SELECT COALESCE(MAX(sort_order), 0) + 1 as next_order FROM custom_form_fields;');
+    const maxOrder = await query('SELECT COALESCE(MAX(sort_order), 0) + 1 as next_order FROM custom_fields;');
     const nextOrder = maxOrder.rows[0].next_order;
 
     const result = await query(
       `
-      INSERT INTO custom_form_fields (id, label_am, label_en, type, options, required, default_value, sort_order)
+      INSERT INTO custom_fields (id, label_am, label_en, type, options, required, default_value, sort_order)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO UPDATE SET
+        label_am = EXCLUDED.label_am,
+        label_en = EXCLUDED.label_en,
+        type = EXCLUDED.type,
+        options = EXCLUDED.options,
+        required = EXCLUDED.required,
+        default_value = EXCLUDED.default_value
       RETURNING *;
       `,
       [
@@ -405,23 +348,29 @@ app.post('/api/custom-fields', async (req, res) => {
       ]
     );
 
+    // Keep custom_form_fields table in sync
+    await query(
+      `
+      INSERT INTO custom_form_fields (id, label_am, label_en, type, options, required, default_value, sort_order)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO NOTHING;
+      `,
+      [f.id, f.labelAm, f.labelEn, f.type, f.options || [], Boolean(f.required), f.defaultValue || null, nextOrder]
+    ).catch(() => {});
+
     res.status(201).json(mapRowToCustomField(result.rows[0]));
   } catch (err) {
-    console.error('Error adding custom field:', err);
-    res.status(500).json({ error: 'Failed to add custom field' });
+    console.error('Error creating custom field:', err);
+    res.status(500).json({ error: 'Failed to create custom field' });
   }
 });
 
-// 8. DELETE /api/custom-fields/:id (Delete custom field)
+// 8. Custom Fields: DELETE /api/custom-fields/:id
 app.delete('/api/custom-fields/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    if (!pool) {
-      memoryCustomFields = memoryCustomFields.filter(x => x.id !== id);
-      return res.json({ success: true, id });
-    }
-
-    await query('DELETE FROM custom_form_fields WHERE id = $1;', [id]);
+    await query('DELETE FROM custom_fields WHERE id = $1;', [id]);
+    await query('DELETE FROM custom_form_fields WHERE id = $1;', [id]).catch(() => {});
     res.json({ success: true, id });
   } catch (err) {
     console.error('Error deleting custom field:', err);
@@ -429,23 +378,17 @@ app.delete('/api/custom-fields/:id', async (req, res) => {
   }
 });
 
-// 9. PUT /api/custom-fields/reorder
+// 9. Custom Fields: PUT /api/custom-fields/reorder
 app.put('/api/custom-fields/reorder', async (req, res) => {
   try {
     const { fieldIds } = req.body;
-    if (!pool) {
-      if (Array.isArray(fieldIds)) {
-        memoryCustomFields.sort((a, b) => fieldIds.indexOf(a.id) - fieldIds.indexOf(b.id));
-      }
-      return res.json(memoryCustomFields);
-    }
-
     if (Array.isArray(fieldIds)) {
       for (let i = 0; i < fieldIds.length; i++) {
-        await query('UPDATE custom_form_fields SET sort_order = $1 WHERE id = $2;', [i, fieldIds[i]]);
+        await query('UPDATE custom_fields SET sort_order = $1 WHERE id = $2;', [i, fieldIds[i]]);
+        await query('UPDATE custom_form_fields SET sort_order = $1 WHERE id = $2;', [i, fieldIds[i]]).catch(() => {});
       }
     }
-    const result = await query('SELECT * FROM custom_form_fields ORDER BY sort_order ASC;');
+    const result = await query('SELECT * FROM custom_fields ORDER BY sort_order ASC;');
     res.json(result.rows.map(mapRowToCustomField));
   } catch (err) {
     console.error('Error reordering custom fields:', err);
@@ -453,26 +396,10 @@ app.put('/api/custom-fields/reorder', async (req, res) => {
   }
 });
 
-// 10. POST /api/reset-demo (Demo reset)
+// 10. POST /api/reset-demo
 app.post('/api/reset-demo', async (req, res) => {
   try {
-    if (!pool) {
-      memoryBeneficiaries = [...INITIAL_BENEFICIARIES];
-      memoryCustomFields = [...INITIAL_CUSTOM_FIELDS];
-      return res.json({ success: true, records: memoryBeneficiaries, customFields: memoryCustomFields });
-    }
-
     await query('TRUNCATE TABLE beneficiaries RESTART IDENTITY;');
-    await query('TRUNCATE TABLE custom_form_fields;');
-
-    for (let i = 0; i < INITIAL_CUSTOM_FIELDS.length; i++) {
-      const f = INITIAL_CUSTOM_FIELDS[i];
-      await query(
-        `INSERT INTO custom_form_fields (id, label_am, label_en, type, options, required, default_value, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
-        [f.id, f.labelAm, f.labelEn, f.type, f.options || [], f.required, f.defaultValue ? String(f.defaultValue) : null, i]
-      );
-    }
 
     for (const b of INITIAL_BENEFICIARIES) {
       await query(
@@ -482,7 +409,8 @@ app.post('/api/reset-demo', async (req, res) => {
           fayda_id, gender, age, health_status, family_male, family_female,
           family_total, phone, category, registration_date, custom_fields
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        ON CONFLICT (fayda_id) DO NOTHING;
         `,
         [
           b.id, b.fullName, b.subCity, b.woreda, b.blockZone, b.locality, b.houseNo,
@@ -496,7 +424,7 @@ app.post('/api/reset-demo', async (req, res) => {
     await query(`SELECT setval('beneficiaries_id_seq', COALESCE((SELECT MAX(id) FROM beneficiaries), 1));`);
 
     const records = (await query('SELECT * FROM beneficiaries ORDER BY id DESC;')).rows.map(mapRowToBeneficiary);
-    const fields = (await query('SELECT * FROM custom_form_fields ORDER BY sort_order ASC;')).rows.map(mapRowToCustomField);
+    const fields = (await query('SELECT * FROM custom_fields ORDER BY sort_order ASC;')).rows.map(mapRowToCustomField);
 
     res.json({ success: true, records, customFields: fields });
   } catch (err) {
@@ -505,8 +433,8 @@ app.post('/api/reset-demo', async (req, res) => {
   }
 });
 
-// 11. Authentication Endpoints
-app.post('/api/auth/login', async (req, res) => {
+// 11. Authentication: Login Handler (shared by /api/auth/login and /api/login)
+const handleLogin = async (req, res) => {
   try {
     const { usernameOrEmail, password } = req.body;
     if (!usernameOrEmail || !password) {
@@ -514,54 +442,73 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const cleanInput = String(usernameOrEmail).trim().toLowerCase();
+    const envAdminUser = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
+    const envAdminPass = process.env.ADMIN_PASSWORD || '123321123';
 
-    if (!pool) {
-      // Offline fallback login for admin & officer
-      if ((cleanInput === 'admin' || cleanInput === 'admin@nslsubcity.gov.et') && password === '123321123') {
-        const user = { id: 1, username: 'admin', fullName: 'ዋና አስተዳዳሪ (System Administrator)', email: 'admin@nslsubcity.gov.et', role: 'super_admin', woreda: 'ዋና መ/ቤት' };
-        return res.json({ success: true, token: createSessionToken(user), user });
+    // 1. Check against admins table in Neon DB
+    let userRow = null;
+    try {
+      const dbRes = await query(
+        'SELECT * FROM admins WHERE LOWER(username) = $1 OR LOWER(email) = $1 LIMIT 1;',
+        [cleanInput]
+      );
+      if (dbRes.rows.length > 0) {
+        userRow = dbRes.rows[0];
       }
-      if ((cleanInput === 'woreda01' || cleanInput === 'birhanu@nslsubcity.gov.et') && password === 'Woreda@2024') {
-        const user = { id: 2, username: 'woreda01', fullName: 'አቶ ብርሃኑ ተስፋዬ (የለቡ 01 መዝጋቢ)', email: 'birhanu@nslsubcity.gov.et', role: 'woreda_officer', woreda: 'ለቡ 01' };
-        return res.json({ success: true, token: createSessionToken(user), user });
+    } catch {
+      // Try fallback to admin_users table
+      const fallbackRes = await query(
+        'SELECT * FROM admin_users WHERE LOWER(username) = $1 OR LOWER(email) = $1 LIMIT 1;',
+        [cleanInput]
+      ).catch(() => ({ rows: [] }));
+      if (fallbackRes.rows.length > 0) {
+        userRow = fallbackRes.rows[0];
       }
-      return res.status(401).json({ error: 'የተጠቃሚ ስም ወይም የይለፍ ቃል ትክክል አይደለም (Invalid username or password)' });
     }
 
-    const result = await query(
-      'SELECT * FROM admin_users WHERE LOWER(username) = $1 OR LOWER(email) = $1 LIMIT 1;',
-      [cleanInput]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'የተጠቃሚ ስም ወይም የይለፍ ቃል ትክክል አይደለም (Invalid username or password)' });
-    }
-
-    const user = result.rows[0];
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'የተጠቃሚ ስም ወይም የይለፍ ቃል ትክክል አይደለም (Invalid username or password)' });
-    }
-
-    const token = createSessionToken(user);
-    res.json({
-      success: true,
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-        fullName: user.full_name,
-        email: user.email,
-        role: user.role,
-        woreda: user.woreda
+    // Verify bcrypt hash from database
+    if (userRow) {
+      const isMatch = await bcrypt.compare(password, userRow.password_hash);
+      if (isMatch) {
+        const user = {
+          id: userRow.id,
+          username: userRow.username,
+          fullName: userRow.full_name,
+          email: userRow.email,
+          role: userRow.role,
+          woreda: userRow.woreda
+        };
+        const token = createSessionToken(user);
+        return res.json({ success: true, token, user });
       }
-    });
+    }
+
+    // 2. Also check against configured ADMIN_USERNAME and ADMIN_PASSWORD
+    if (cleanInput === envAdminUser && password === envAdminPass) {
+      const user = {
+        id: userRow ? userRow.id : 1,
+        username: 'admin',
+        fullName: 'ዋና አስተዳዳሪ (System Administrator)',
+        email: 'admin@nslsubcity.gov.et',
+        role: 'super_admin',
+        woreda: 'ዋና መ/ቤት'
+      };
+      const token = createSessionToken(user);
+      return res.json({ success: true, token, user });
+    }
+
+    return res.status(401).json({ error: 'የተጠቃሚ ስም ወይም የይለፍ ቃል ትክክል አይደለም (Invalid username or password)' });
   } catch (err) {
-    console.error('Error during login:', err);
+    console.error('Login error:', err);
     res.status(500).json({ error: 'የመግቢያ ሂደት አልተሳካም (Login failed)' });
   }
-});
+};
 
+// Route aliases
+app.post('/api/auth/login', handleLogin);
+app.post('/api/login', handleLogin);
+
+// 12. Authentication: Get Current Session User
 app.get('/api/auth/me', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -575,32 +522,23 @@ app.get('/api/auth/me', async (req, res) => {
       return res.status(401).json({ error: 'የክፍለ ጊዜው አልቋል ወይም ልክ ያልሆነ ማስረጃ ነው (Session expired or invalid)' });
     }
 
-    if (!pool) {
-      return res.json({ user: payload });
+    let user = null;
+    const dbRes = await query('SELECT id, username, full_name, email, role, woreda FROM admins WHERE id = $1;', [payload.id]).catch(() => ({ rows: [] }));
+    if (dbRes.rows.length > 0) {
+      const r = dbRes.rows[0];
+      user = { id: r.id, username: r.username, fullName: r.full_name, email: r.email, role: r.role, woreda: r.woreda };
+    } else {
+      user = { id: payload.id, username: payload.username, fullName: 'ዋና አስተዳዳሪ', email: 'admin@nslsubcity.gov.et', role: payload.role, woreda: payload.woreda };
     }
 
-    const result = await query('SELECT id, username, full_name, email, role, woreda FROM admin_users WHERE id = $1;', [payload.id]);
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'ተጠቃሚው አልተገኘም (User not found)' });
-    }
-
-    const user = result.rows[0];
-    res.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        fullName: user.full_name,
-        email: user.email,
-        role: user.role,
-        woreda: user.woreda
-      }
-    });
+    res.json({ user });
   } catch (err) {
-    console.error('Error in /api/auth/me:', err);
+    console.error('Session error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
+// 13. Authentication: Logout
 app.post('/api/auth/logout', (_req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
 });
@@ -608,10 +546,14 @@ app.post('/api/auth/logout', (_req, res) => {
 // ----------------- Server Start -----------------
 app.listen(PORT, async () => {
   console.log(`========================================================`);
-  console.log(`🚀 NSL Fayda Registry Backend listening on port ${PORT}`);
+  console.log(`🚀 NSL Fayda Registry Backend running on port ${PORT}`);
   console.log(`📡 Health Check: http://localhost:${PORT}/api/health`);
   console.log(`📋 Beneficiaries: http://localhost:${PORT}/api/beneficiaries`);
   console.log(`========================================================`);
 
-  await initDatabase();
+  try {
+    await initDatabase();
+  } catch (err) {
+    console.error('Database migration failed on startup:', err);
+  }
 });
