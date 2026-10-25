@@ -16,8 +16,18 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+app.options('*', cors());
 
 app.use(express.json());
+
+// Support both /api/<route> and direct /<route> (e.g. /beneficiaries -> /api/beneficiaries)
+app.use((req, _res, next) => {
+  const directRoutes = ['/beneficiaries', '/custom-fields', '/auth', '/health', '/reset-demo'];
+  if (directRoutes.some(route => req.url === route || req.url.startsWith(route + '/') || req.url.startsWith(route + '?'))) {
+    req.url = '/api' + req.url;
+  }
+  next();
+});
 
 // ----------------- Auth Token Helper -----------------
 function createSessionToken(user) {
