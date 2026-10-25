@@ -163,27 +163,28 @@ export default function App() {
     ? Math.max(...records.map((r) => r.id || 0)) + 1
     : 1;
 
-  // Add Beneficiary Handler (with PostgreSQL sync)
+  // Add Beneficiary Handler (with direct PostgreSQL sync)
   const handleAddRecord = async (recordData: Omit<BeneficiaryRecord, 'id'>) => {
-    if (isDbConnected) {
-      try {
-        const created = await createBeneficiaryApi(recordData);
-        setRecords((prev) => [created, ...prev.filter((r) => r.id !== created.id)]);
-        setRecentSubmission(created);
-        return;
-      } catch (err: any) {
-        console.error('Database insert failed, saving locally:', err);
-        alert(err.message || 'ስህተት ተፈጥሯል፤ እባክዎ እንደገና ይሞክሩ');
+    try {
+      const created = await createBeneficiaryApi(recordData);
+      setRecords((prev) => [created, ...prev.filter((r) => r.id !== created.id)]);
+      setRecentSubmission(created);
+      setIsDbConnected(true);
+      return;
+    } catch (err: any) {
+      console.warn('Direct database save error:', err);
+      if (err.message && (err.message.includes('ፋይዳ') || err.message.includes('Fayda') || err.message.includes('ቀደም'))) {
+        alert(err.message);
         return;
       }
+      // If network/offline, save to local cache
+      const newRecord: BeneficiaryRecord = {
+        ...recordData,
+        id: nextId
+      };
+      setRecords((prev) => [newRecord, ...prev]);
+      setRecentSubmission(newRecord);
     }
-
-    const newRecord: BeneficiaryRecord = {
-      ...recordData,
-      id: nextId
-    };
-    setRecords((prev) => [newRecord, ...prev]);
-    setRecentSubmission(newRecord);
   };
 
   // Update Beneficiary Handler
@@ -298,6 +299,7 @@ export default function App() {
         isDbConnected={isDbConnected}
         currentUser={currentAdmin}
         onLogout={handleLogout}
+        onRefreshConnection={syncWithDatabase}
       />
 
       {/* Main Content Area */}
@@ -324,16 +326,11 @@ export default function App() {
         )}
       </main>
 
-      {/* Registration Confirmed Modal with PDF Slip Download */}
+      {/* Registration Confirmed Modal */}
       {recentSubmission && (
         <RegistrationSuccessModal
           record={recentSubmission}
-          customFields={customFields}
           onRegisterAnother={() => setRecentSubmission(null)}
-          onGoToAdmin={() => {
-            setRecentSubmission(null);
-            navigateView('admin');
-          }}
           onClose={() => setRecentSubmission(null)}
         />
       )}
