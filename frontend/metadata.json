@@ -1,0 +1,6 @@
+{
+  "name": "Nifas Silk-Lafto Beneficiary & Fayda Registry",
+  "description": "Nifas Silk-Lafto Sub-City Administration Beneficiary and Fayda ID Registry System (የተረጂዎች እና የፋይዳ ምዝገባ ሲስተም)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

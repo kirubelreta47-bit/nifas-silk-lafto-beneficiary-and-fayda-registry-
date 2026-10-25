@@ -1,0 +1,18 @@
+{
+  "name": "nsl-beneficiary-fayda-registry-workspace",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Nifas Silk-Lafto Sub-City Beneficiary & Fayda Registry - Monorepo Workspace",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "start:backend": "npm run start --prefix backend",
+    "build:frontend": "npm run build --prefix frontend",
+    "lint:frontend": "npm run lint --prefix frontend",
+    "install:all": "npm install --prefix frontend && npm install --prefix backend"
+  }
+}
