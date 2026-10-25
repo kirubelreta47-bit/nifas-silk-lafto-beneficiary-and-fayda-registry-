@@ -517,7 +517,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     if (!pool) {
       // Offline fallback login for admin & officer
-      if ((cleanInput === 'admin' || cleanInput === 'admin@nslsubcity.gov.et') && password === 'Admin@2024') {
+      if ((cleanInput === 'admin' || cleanInput === 'admin@nslsubcity.gov.et') && password === '123321123') {
         const user = { id: 1, username: 'admin', fullName: 'ዋና አስተዳዳሪ (System Administrator)', email: 'admin@nslsubcity.gov.et', role: 'super_admin', woreda: 'ዋና መ/ቤት' };
         return res.json({ success: true, token: createSessionToken(user), user });
       }

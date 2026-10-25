@@ -142,23 +142,19 @@ async function initDatabase() {
       await client.query(`SELECT setval('beneficiaries_id_seq', COALESCE((SELECT MAX(id) FROM beneficiaries), 1));`);
     }
 
-    // 7. Seed Admin and Officer accounts if empty
-    const adminCheck = await client.query('SELECT COUNT(*) FROM admin_users;');
-    if (parseInt(adminCheck.rows[0].count, 10) === 0) {
-      console.log('🌱 Seeding default administrator accounts...');
-      const adminHash = await bcrypt.hash('Admin@2024', 10);
-      const officerHash = await bcrypt.hash('Woreda@2024', 10);
+    // 7. Seed or Update Admin and Officer accounts
+    const adminHash = await bcrypt.hash('123321123', 10);
+    const officerHash = await bcrypt.hash('Woreda@2024', 10);
 
-      await client.query(
-        `INSERT INTO admin_users (username, full_name, email, password_hash, role, woreda)
-         VALUES 
-           ($1, $2, $3, $4, 'super_admin', 'ዋና መ/ቤት'),
-           ($5, $6, $7, $8, 'woreda_officer', 'ለቡ 01')
-         ON CONFLICT (username) DO NOTHING;`,
-        ['admin', 'ዋና አስተዳዳሪ (System Administrator)', 'admin@nslsubcity.gov.et', adminHash,
-         'woreda01', 'አቶ ብርሃኑ ተስፋዬ (የለቡ 01 መዝጋቢ)', 'birhanu@nslsubcity.gov.et', officerHash]
-      );
-    }
+    await client.query(
+      `INSERT INTO admin_users (username, full_name, email, password_hash, role, woreda)
+       VALUES 
+         ($1, $2, $3, $4, 'super_admin', 'ዋና መ/ቤት'),
+         ($5, $6, $7, $8, 'woreda_officer', 'ለቡ 01')
+       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash;`,
+      ['admin', 'ዋና አስተዳዳሪ (System Administrator)', 'admin@nslsubcity.gov.et', adminHash,
+       'woreda01', 'አቶ ብርሃኑ ተስፋዬ (የለቡ 01 መዝጋቢ)', 'birhanu@nslsubcity.gov.et', officerHash]
+    );
 
     console.log('✅ PostgreSQL database tables and seeds ready.');
   } catch (err) {

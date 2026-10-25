@@ -167,11 +167,11 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
               <button
                 type="button"
-                onClick={() => autofillCredentials('admin', 'Admin@2024')}
+                onClick={() => autofillCredentials('admin', '123321123')}
                 className="text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition-all cursor-pointer group"
               >
                 <div className="font-bold text-blue-950 group-hover:text-blue-900">👑 ዋና አስተዳዳሪ (Super Admin)</div>
-                <div className="text-slate-500 font-mono text-[10px] mt-0.5">admin / Admin@2024</div>
+                <div className="text-slate-500 font-mono text-[10px] mt-0.5">admin / 123321123</div>
               </button>
 
               <button
