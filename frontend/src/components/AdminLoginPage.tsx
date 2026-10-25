@@ -1,18 +1,14 @@
 import React, { useState } from 'react';
 import { CivicEmblem } from './CivicEmblem';
-import { Lock, User, Eye, EyeOff, ShieldCheck, AlertCircle, KeyRound, Sparkles, ArrowLeft } from 'lucide-react';
+import { Lock, User, Eye, EyeOff, ShieldCheck, AlertCircle, KeyRound, Sparkles } from 'lucide-react';
 import { loginAdminApi } from '../services/api';
 import { AdminUser } from '../types/registry';
 
 interface AdminLoginPageProps {
   onLoginSuccess: (user: AdminUser) => void;
-  onGoHome: () => void;
 }
 
-export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
-  onLoginSuccess,
-  onGoHome
-}) => {
+export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onLoginSuccess }) => {
   const [usernameOrEmail, setUsernameOrEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -46,43 +42,47 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-between bg-slate-900 text-slate-100 selection:bg-yellow-500 selection:text-blue-950">
-      {/* Top Bar with Back to Home button */}
-      <div className="p-4 sm:p-6 flex items-center justify-between max-w-7xl mx-auto w-full">
-        <button
-          type="button"
-          onClick={onGoHome}
-          className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 px-3.5 py-2 rounded-xl border border-slate-700 transition-all cursor-pointer"
-        >
-          <ArrowLeft className="w-4 h-4 text-yellow-400" />
-          <span>ወደ ህዝባዊ ቅጽ ተመለስ (Public Portal)</span>
-        </button>
-
-        <div className="text-right text-[11px] text-slate-400 font-mono hidden sm:block">
-          ROUTE: <span className="text-yellow-400">/admin</span>
+    <div className="min-h-screen flex flex-col justify-between bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-slate-100 selection:bg-yellow-500 selection:text-blue-950">
+      {/* Top Branding Bar */}
+      <header className="p-4 sm:p-6 max-w-7xl mx-auto w-full flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <CivicEmblem size={36} />
+          <div>
+            <h1 className="text-xs sm:text-sm font-bold text-white tracking-wide">
+              በንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር
+            </h1>
+            <p className="text-[11px] text-yellow-400 font-medium">
+              Nifas Silk-Lafto Sub-City Administration
+            </p>
+          </div>
         </div>
-      </div>
+
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-900/60 border border-yellow-500/30 text-[11px] text-yellow-300 font-medium">
+          <ShieldCheck className="w-3.5 h-3.5 text-yellow-400" />
+          <span>ኦፊሴላዊ መግቢያ</span>
+        </div>
+      </header>
 
       {/* Main Centered Login Box */}
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden text-slate-900 animate-in fade-in zoom-in-95 duration-200">
-          {/* Header Ribbon */}
-          <div className="bg-gradient-to-r from-blue-950 via-blue-900 to-indigo-950 text-white p-7 text-center border-b-4 border-yellow-500">
+          {/* Header Ribbon: Deep Blue & Gold */}
+          <div className="bg-gradient-to-r from-blue-950 via-blue-900 to-blue-950 text-white p-7 text-center border-b-4 border-yellow-500">
             <div className="flex justify-center mb-3">
               <div className="p-3 bg-white/10 rounded-2xl ring-1 ring-white/20 shadow-inner">
-                <CivicEmblem size={56} />
+                <CivicEmblem size={58} />
               </div>
             </div>
 
             <span className="inline-block px-3 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-yellow-500/20 text-yellow-300 border border-yellow-500/30 mb-2">
-              የተቆጣጣሪዎችና ሰራተኞች ፖርታል
+              የተጠቃሚዎች እና ሰራተኞች መግቢያ
             </span>
 
             <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-              የንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር
+              የተረጂዎች እና የፋይዳ ምዝገባ ሲስተም
             </h2>
             <p className="text-xs text-blue-200 mt-0.5">
-              የተረጂዎች ምዝገባ አስተዳዳሪ መግቢያ (/admin Authentication)
+              ወደ ሲስተሙ ለመግባት መለያዎን ያስገቡ (System Authentication)
             </p>
           </div>
 
@@ -108,8 +108,9 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
                     required
                     value={usernameOrEmail}
                     onChange={(e) => setUsernameOrEmail(e.target.value)}
-                    placeholder="admin ወይም woreda01..."
+                    placeholder="admin ወይም user1..."
                     autoComplete="username"
+                    autoFocus
                     className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-slate-50 focus:bg-white focus:outline-none focus:border-blue-900 focus:ring-2 focus:ring-blue-900/10 transition-all font-medium text-slate-900"
                   />
                 </div>
@@ -136,6 +137,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
                     tabIndex={-1}
+                    aria-label="Toggle password visibility"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -146,7 +148,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full mt-2 py-3 px-4 rounded-xl font-bold text-sm text-white bg-blue-950 hover:bg-blue-900 active:bg-blue-950 shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                className="w-full mt-2 py-3 px-4 rounded-xl font-bold text-sm text-white bg-blue-950 hover:bg-blue-900 active:bg-blue-950 shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 border border-blue-900"
               >
                 {isLoading ? (
                   <>
@@ -156,7 +158,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
                 ) : (
                   <>
                     <KeyRound className="w-4 h-4 text-yellow-400" />
-                    <span>ይግቡ (Sign In to /admin)</span>
+                    <span>ወደ ሲስተሙ ይግቡ (Sign In)</span>
                   </>
                 )}
               </button>
@@ -172,35 +174,39 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
                 <button
                   type="button"
                   onClick={() => autofillCredentials('admin', '123321123')}
-                  className="text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition-all cursor-pointer group"
+                  className="text-left p-2.5 rounded-lg bg-white border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition-all cursor-pointer group"
                 >
-                  <div className="font-bold text-blue-950 group-hover:text-blue-900">👑 ዋና አስተዳዳሪ (Super Admin)</div>
+                  <div className="font-bold text-blue-950 group-hover:text-blue-900 flex items-center gap-1">
+                    <span>👑 ዋና አስተዳዳሪ (Admin)</span>
+                  </div>
                   <div className="text-slate-500 font-mono text-[10px] mt-0.5">admin / 123321123</div>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => autofillCredentials('woreda01', 'Woreda@2024')}
-                  className="text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition-all cursor-pointer group"
+                  onClick={() => autofillCredentials('user1', '12345678')}
+                  className="text-left p-2.5 rounded-lg bg-white border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition-all cursor-pointer group"
                 >
-                  <div className="font-bold text-blue-950 group-hover:text-blue-900">🏢 ወረዳ 01 መዝጋቢ (Officer)</div>
-                  <div className="text-slate-500 font-mono text-[10px] mt-0.5">woreda01 / Woreda@2024</div>
+                  <div className="font-bold text-blue-950 group-hover:text-blue-900 flex items-center gap-1">
+                    <span>👤 መረጃ መዝጋቢ (User)</span>
+                  </div>
+                  <div className="text-slate-500 font-mono text-[10px] mt-0.5">user1 / 12345678</div>
                 </button>
               </div>
             </div>
 
             <div className="pt-2 text-center text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span>የተፈቀደላቸው የክፍለ ከተማውና የወረዳ ሰራተኞች ብቻ የሚገቡበት</span>
+              <span>የተፈቀደላቸው የክፍለ ከተማው ሰራተኞች ብቻ የሚገቡበት</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* Footer copyright */}
-      <div className="p-4 text-center text-xs text-slate-500">
-        © {new Date().getFullYear()} በንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር | Nifas Silk-Lafto Sub-City
-      </div>
+      <footer className="p-4 text-center text-xs text-slate-400">
+        © {new Date().getFullYear()} በንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር | Nifas Silk-Lafto Sub-City Administration
+      </footer>
     </div>
   );
 };

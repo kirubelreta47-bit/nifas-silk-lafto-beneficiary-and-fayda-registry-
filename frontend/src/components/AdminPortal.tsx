@@ -9,6 +9,7 @@ import {
 import { AdminDirectoryTab } from './AdminDirectoryTab';
 import { AdminReportsTab } from './AdminReportsTab';
 import { AdminFormBuilderTab } from './AdminFormBuilderTab';
+import { AdminUsersTab } from './AdminUsersTab';
 import { AdminPdfExportModal } from './AdminPdfExportModal';
 import { RegistrationForm } from './RegistrationForm';
 import {
@@ -25,12 +26,15 @@ import {
   FileText,
   Printer,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Users
 } from 'lucide-react';
+import { AdminUser } from '../types/registry';
 
 interface AdminPortalProps {
   records: BeneficiaryRecord[];
   customFields: CustomFormField[];
+  currentAdmin?: AdminUser | null;
   onAddRecord: (record: Omit<BeneficiaryRecord, 'id'>) => void;
   onUpdateRecord: (updated: BeneficiaryRecord) => void;
   onDeleteRecord: (id: number) => void;
@@ -44,6 +48,7 @@ interface AdminPortalProps {
 export const AdminPortal: React.FC<AdminPortalProps> = ({
   records,
   customFields,
+  currentAdmin = null,
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -54,7 +59,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   nextId
 }) => {
   // Main section state
-  const [subTab, setSubTab] = useState<'directory' | 'reports' | 'formBuilder'>('directory');
+  const [subTab, setSubTab] = useState<'directory' | 'reports' | 'formBuilder' | 'users'>('directory');
 
   // Directory filter states (housed in sidebar)
   const [activeCategory, setActiveCategory] = useState<'all' | 'workforce' | 'continuous'>('all');
@@ -171,6 +176,21 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
                 {customFields.length}
               </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSubTab('users')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                subTab === 'users'
+                  ? 'bg-blue-950 text-white shadow-xs'
+                  : 'text-slate-700 hover:bg-slate-100 hover:text-blue-950'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Users className="w-4 h-4 text-yellow-400" />
+                <span>ተጠቃሚዎች (Users)</span>
+              </div>
             </button>
           </div>
 
@@ -391,6 +411,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               onMoveField={onMoveField}
               onExportPdf={() => setIsPdfModalOpen(true)}
             />
+          )}
+
+          {subTab === 'users' && (
+            <AdminUsersTab currentAdmin={currentAdmin} />
           )}
         </main>
       </div>

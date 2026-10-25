@@ -5,7 +5,7 @@ import { formatFaydaId, computeRegistryStats } from '../utils/registryLogic';
 import { Printer, X, FileText, CheckCircle2 } from 'lucide-react';
 
 interface AdminPdfExportModalProps {
-  subTab: 'directory' | 'reports' | 'formBuilder';
+  subTab: 'directory' | 'reports' | 'formBuilder' | 'users' | string;
   activeCategory: 'all' | 'workforce' | 'continuous';
   records: BeneficiaryRecord[];
   filteredRecords: BeneficiaryRecord[];

@@ -212,3 +212,57 @@ export async function logoutAdminApi(): Promise<void> {
     }
   }
 }
+
+// ----------------- User Management API -----------------
+export async function fetchUsersApi(): Promise<AdminUser[]> {
+  const token = getStoredAuthToken();
+  const res = await fetch(`${API_BASE_URL}/users`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `ተጠቃሚዎችን ማምጣት አልተቻለም (${res.statusText})`);
+  }
+  return res.json();
+}
+
+export async function createUserApi(userData: {
+  username: string;
+  fullName: string;
+  email: string;
+  password: string;
+  role: 'user' | 'admin';
+  woreda?: string;
+}): Promise<AdminUser> {
+  const token = getStoredAuthToken();
+  const res = await fetch(`${API_BASE_URL}/users`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(userData)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `አዲስ ተጠቃሚ መመዝገብ አልተቻለም (${res.statusText})`);
+  }
+  return res.json();
+}
+
+export async function deleteUserApi(id: number): Promise<void> {
+  const token = getStoredAuthToken();
+  const res = await fetch(`${API_BASE_URL}/users/${id}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `ተጠቃሚውን መሰረዝ አልተቻለም (${res.statusText})`);
+  }
+}
+

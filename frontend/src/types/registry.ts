@@ -51,6 +51,8 @@ export interface AdminUser {
   username: string;
   fullName: string;
   email: string;
-  role: 'super_admin' | 'woreda_officer' | string;
+  role: 'admin' | 'user' | string;
   woreda?: string;
+  createdAt?: string;
 }
+

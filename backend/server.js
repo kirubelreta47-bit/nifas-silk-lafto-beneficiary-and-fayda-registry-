@@ -22,7 +22,7 @@ app.use(express.json());
 
 // Support both /api/<route> and direct /<route> (e.g. /beneficiaries -> /api/beneficiaries)
 app.use((req, _res, next) => {
-  const directRoutes = ['/beneficiaries', '/custom-fields', '/auth', '/health', '/reset-demo'];
+  const directRoutes = ['/beneficiaries', '/custom-fields', '/auth', '/health', '/reset-demo', '/users'];
   if (directRoutes.some(route => req.url === route || req.url.startsWith(route + '/') || req.url.startsWith(route + '?'))) {
     req.url = '/api' + req.url;
   }
@@ -500,7 +500,7 @@ const handleLogin = async (req, res) => {
           username: userRow.username,
           fullName: userRow.full_name,
           email: userRow.email,
-          role: userRow.role,
+          role: (userRow.role === 'admin' || userRow.role === 'super_admin') ? 'admin' : 'user',
           woreda: userRow.woreda
         };
         const token = createSessionToken(user);
@@ -515,7 +515,7 @@ const handleLogin = async (req, res) => {
         username: 'admin',
         fullName: 'ዋና አስተዳዳሪ (System Administrator)',
         email: 'admin@nslsubcity.gov.et',
-        role: 'super_admin',
+        role: 'admin',
         woreda: 'ዋና መ/ቤት'
       };
       const token = createSessionToken(user);
@@ -551,9 +551,23 @@ app.get('/api/auth/me', async (req, res) => {
     const dbRes = await query('SELECT id, username, full_name, email, role, woreda FROM admins WHERE id = $1;', [payload.id]).catch(() => ({ rows: [] }));
     if (dbRes.rows.length > 0) {
       const r = dbRes.rows[0];
-      user = { id: r.id, username: r.username, fullName: r.full_name, email: r.email, role: r.role, woreda: r.woreda };
+      user = {
+        id: r.id,
+        username: r.username,
+        fullName: r.full_name,
+        email: r.email,
+        role: (r.role === 'admin' || r.role === 'super_admin') ? 'admin' : 'user',
+        woreda: r.woreda
+      };
     } else {
-      user = { id: payload.id, username: payload.username, fullName: 'ዋና አስተዳዳሪ', email: 'admin@nslsubcity.gov.et', role: payload.role, woreda: payload.woreda };
+      user = {
+        id: payload.id,
+        username: payload.username,
+        fullName: payload.username === 'admin' ? 'ዋና አስተዳዳሪ' : 'የመረጃ መዝጋቢ',
+        email: `${payload.username}@nslsubcity.gov.et`,
+        role: (payload.role === 'admin' || payload.role === 'super_admin') ? 'admin' : 'user',
+        woreda: payload.woreda || 'ዋና መ/ቤት'
+      };
     }
 
     res.json({ user });
@@ -566,6 +580,123 @@ app.get('/api/auth/me', async (req, res) => {
 // 13. Authentication: Logout
 app.post('/api/auth/logout', (_req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// 14. User Management: GET /api/users (Admin Only)
+app.get('/api/users', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'ያልተፈቀደ መዳረሻ (Unauthorized)' });
+    }
+    const token = authHeader.split(' ')[1];
+    const payload = verifySessionToken(token);
+    if (!payload) {
+      return res.status(401).json({ error: 'የክፍለ ጊዜው አልቋል (Session expired)' });
+    }
+    if (payload.role !== 'admin' && payload.role !== 'super_admin') {
+      return res.status(403).json({ error: 'ይህንን ለማድረግ የአስተዳዳሪ ፈቃድ ያስፈልጋል (Admin privileges required)' });
+    }
+
+    const result = await query(
+      'SELECT id, username, full_name, email, role, woreda, created_at FROM admins ORDER BY id ASC;'
+    );
+    const users = result.rows.map(r => ({
+      id: r.id,
+      username: r.username,
+      fullName: r.full_name,
+      email: r.email,
+      role: (r.role === 'admin' || r.role === 'super_admin') ? 'admin' : 'user',
+      woreda: r.woreda,
+      createdAt: r.created_at
+    }));
+    res.json(users);
+  } catch (err) {
+    console.error('Fetch users error:', err);
+    res.status(500).json({ error: 'ተጠቃሚዎችን ማምጣት አልተቻለም' });
+  }
+});
+
+// 15. User Management: POST /api/users (Create User - Admin Only)
+app.post('/api/users', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'ያልተፈቀደ መዳረሻ (Unauthorized)' });
+    }
+    const token = authHeader.split(' ')[1];
+    const payload = verifySessionToken(token);
+    if (!payload || (payload.role !== 'admin' && payload.role !== 'super_admin')) {
+      return res.status(403).json({ error: 'ይህንን ለማድረግ የአስተዳዳሪ ፈቃድ ያስፈልጋል (Admin privileges required)' });
+    }
+
+    const { username, fullName, email, password, role = 'user', woreda = 'ለቡ 01' } = req.body;
+    if (!username || !fullName || !email || !password) {
+      return res.status(400).json({ error: 'ሙሉ መረጃዎችን (ስም፣ የተጠቃሚ ስም፣ ኢሜይል እና የይለፍ ቃል) ያስገቡ' });
+    }
+
+    const normalizedUsername = String(username).trim().toLowerCase();
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    // Check duplicate
+    const existing = await query(
+      'SELECT id FROM admins WHERE LOWER(username) = $1 OR LOWER(email) = $2 LIMIT 1;',
+      [normalizedUsername, normalizedEmail]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'ይህ የተጠቃሚ ስም ወይም ኢሜይል አስቀድሞ ተመዝግቧል (Username or email already exists)' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const assignedRole = role === 'admin' ? 'admin' : 'user';
+
+    const insertRes = await query(
+      `INSERT INTO admins (username, full_name, email, password_hash, role, woreda)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, username, full_name, email, role, woreda, created_at;`,
+      [normalizedUsername, fullName.trim(), normalizedEmail, passwordHash, assignedRole, woreda]
+    );
+
+    const newUser = insertRes.rows[0];
+    res.status(201).json({
+      id: newUser.id,
+      username: newUser.username,
+      fullName: newUser.full_name,
+      email: newUser.email,
+      role: newUser.role,
+      woreda: newUser.woreda,
+      createdAt: newUser.created_at
+    });
+  } catch (err) {
+    console.error('Create user error:', err);
+    res.status(500).json({ error: 'አዲስ ተጠቃሚ መፍጠር አልተቻለም' });
+  }
+});
+
+// 16. User Management: DELETE /api/users/:id (Delete User - Admin Only)
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'ያልተፈቀደ መዳረሻ (Unauthorized)' });
+    }
+    const token = authHeader.split(' ')[1];
+    const payload = verifySessionToken(token);
+    if (!payload || (payload.role !== 'admin' && payload.role !== 'super_admin')) {
+      return res.status(403).json({ error: 'ይህንን ለማድረግ የአስተዳዳሪ ፈቃድ ያስፈልጋል' });
+    }
+
+    const targetId = parseInt(req.params.id, 10);
+    if (targetId === payload.id) {
+      return res.status(400).json({ error: 'ራስዎን መሰረዝ አይችሉም (Cannot delete your own account)' });
+    }
+
+    await query('DELETE FROM admins WHERE id = $1;', [targetId]);
+    res.json({ success: true, message: 'ተጠቃሚው ተሰርዟል' });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ error: 'ተጠቃሚውን መሰረዝ አልተቻለም' });
+  }
 });
 
 // 404 Catch-All Handler

@@ -124,34 +124,26 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);
     `);
 
-    // 5. Seed or Update Default Admins (username: 'admin', password: '123321123')
+    // 5. Seed or Update Default Admins & Users (admin: '123321123', user1: '12345678')
     const adminHash = await bcrypt.hash('123321123', 10);
-    const officerHash = await bcrypt.hash('Woreda@2024', 10);
+    const userHash = await bcrypt.hash('12345678', 10);
 
-    // Upsert into admins
+    // Normalize any legacy roles
+    await client.query(`UPDATE admins SET role = 'user' WHERE role = 'woreda_officer';`).catch(() => {});
+    await client.query(`UPDATE admins SET role = 'admin' WHERE role = 'super_admin';`).catch(() => {});
+
+    // Upsert admin and user1 into admins
     await client.query(
       `INSERT INTO admins (username, full_name, email, password_hash, role, woreda)
        VALUES 
-         ($1, $2, $3, $4, 'super_admin', 'ዋና መ/ቤት'),
-         ($5, $6, $7, $8, 'woreda_officer', 'ለቡ 01')
+         ($1, $2, $3, $4, 'admin', 'ዋና መ/ቤት'),
+         ($5, $6, $7, $8, 'user', 'ለቡ 01')
        ON CONFLICT (username) DO UPDATE SET 
          password_hash = EXCLUDED.password_hash,
-         email = EXCLUDED.email;`,
+         email = EXCLUDED.email,
+         role = EXCLUDED.role;`,
       ['admin', 'ዋና አስተዳዳሪ (System Administrator)', 'admin@nslsubcity.gov.et', adminHash,
-       'woreda01', 'አቶ ብርሃኑ ተስፋዬ (የለቡ 01 መዝጋቢ)', 'birhanu@nslsubcity.gov.et', officerHash]
-    );
-
-    // Upsert into admin_users for compatibility
-    await client.query(
-      `INSERT INTO admin_users (username, full_name, email, password_hash, role, woreda)
-       VALUES 
-         ($1, $2, $3, $4, 'super_admin', 'ዋና መ/ቤት'),
-         ($5, $6, $7, $8, 'woreda_officer', 'ለቡ 01')
-       ON CONFLICT (username) DO UPDATE SET 
-         password_hash = EXCLUDED.password_hash,
-         email = EXCLUDED.email;`,
-      ['admin', 'ዋና አስተዳዳሪ (System Administrator)', 'admin@nslsubcity.gov.et', adminHash,
-       'woreda01', 'አቶ ብርሃኑ ተስፋዬ (የለቡ 01 መዝጋቢ)', 'birhanu@nslsubcity.gov.et', officerHash]
+       'user1', 'አቶ ብርሃኑ ተስፋዬ (የለቡ 01 መዝጋቢ)', 'user1@nslsubcity.gov.et', userHash]
     );
 
     // 6. Seed custom_fields if empty

@@ -22,25 +22,50 @@ import {
   logoutAdminApi
 } from './services/api';
 
-const getInitialRoute = (): 'public' | 'admin' => {
-  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
-    return 'admin';
-  }
-  return 'public';
-};
-
 export default function App() {
-  const [currentView, setCurrentView] = useState<'public' | 'admin'>(getInitialRoute);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(null);
+  const [currentView, setCurrentView] = useState<'public' | 'admin'>('public');
+
   const [records, setRecords] = useState<BeneficiaryRecord[]>(INITIAL_BENEFICIARIES);
   const [customFields, setCustomFields] = useState<CustomFormField[]>(INITIAL_CUSTOM_FIELDS);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Modal for recent submission confirmation
   const [recentSubmission, setRecentSubmission] = useState<BeneficiaryRecord | null>(null);
 
-  // Load real data from backend API
+  // 1. Initial Authentication Check on Load
+  useEffect(() => {
+    let isMounted = true;
+    getCurrentAdminApi()
+      .then((user) => {
+        if (!isMounted) return;
+        if (user) {
+          setCurrentAdmin(user);
+          const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+          if (isAdmin && window.location.pathname.startsWith('/admin')) {
+            setCurrentView('admin');
+          } else {
+            setCurrentView(isAdmin && window.location.pathname.startsWith('/admin') ? 'admin' : 'public');
+          }
+        } else {
+          setCurrentAdmin(null);
+        }
+      })
+      .catch(() => {
+        if (isMounted) setCurrentAdmin(null);
+      })
+      .finally(() => {
+        if (isMounted) setIsCheckingAuth(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 2. Load real data from backend API once authenticated
   const loadData = useCallback(async () => {
     setIsLoading(true);
     setFetchError(null);
@@ -64,22 +89,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  // Check for active admin session on mount
-  useEffect(() => {
-    getCurrentAdminApi().then((user) => {
-      if (user) {
-        setCurrentAdmin(user);
-      }
-    });
-  }, []);
+    if (currentAdmin) {
+      loadData();
+    }
+  }, [currentAdmin, loadData]);
 
   // Sync route with URL navigation (/ and /admin)
   const navigateView = (view: 'public' | 'admin') => {
-    setCurrentView(view);
-    const targetPath = view === 'admin' ? '/admin' : '/';
+    const isAdmin = currentAdmin?.role === 'admin' || currentAdmin?.role === 'super_admin';
+    // User role can only access public registration form
+    const allowedView = !isAdmin ? 'public' : view;
+
+    setCurrentView(allowedView);
+    const targetPath = allowedView === 'admin' ? '/admin' : '/';
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, '', targetPath);
     }
@@ -88,7 +110,8 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
-      if (path.startsWith('/admin')) {
+      const isAdmin = currentAdmin?.role === 'admin' || currentAdmin?.role === 'super_admin';
+      if (path.startsWith('/admin') && isAdmin) {
         setCurrentView('admin');
       } else {
         setCurrentView('public');
@@ -97,17 +120,22 @@ export default function App() {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [currentAdmin]);
 
   const handleLoginSuccess = (user: AdminUser) => {
     setCurrentAdmin(user);
-    navigateView('admin');
+    const isAdmin = user.role === 'admin' || user.role === 'super_admin';
+    if (isAdmin) {
+      navigateView('admin');
+    } else {
+      navigateView('public');
+    }
   };
 
   const handleLogout = async () => {
     await logoutAdminApi();
     setCurrentAdmin(null);
-    navigateView('public');
+    setCurrentView('public');
   };
 
   // Calculate next Serial ID for display
@@ -200,15 +228,28 @@ export default function App() {
     }
   };
 
-  // If visiting /admin without active login session, render the dedicated /admin login screen
-  if (currentView === 'admin' && !currentAdmin) {
+  // 3. Fast Loading Screen on mount while checking session
+  if (isCheckingAuth) {
     return (
-      <AdminLoginPage
-        onLoginSuccess={handleLoginSuccess}
-        onGoHome={() => navigateView('public')}
-      />
+      <div className="min-h-screen flex flex-col items-center justify-center bg-blue-950 text-white p-4 selection:bg-yellow-500">
+        <CivicEmblem size={64} className="animate-pulse drop-shadow-lg" />
+        <h2 className="text-sm sm:text-base font-bold mt-4 tracking-tight text-white">
+          በንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር
+        </h2>
+        <p className="text-xs text-yellow-400 mt-1">
+          የተረጂዎች እና የፋይዳ ምዝገባ ሲስተም (Beneficiary & Fayda Registry)
+        </p>
+        <div className="w-6 h-6 border-2 border-yellow-400/30 border-t-yellow-400 rounded-full animate-spin mt-6" />
+      </div>
     );
   }
+
+  // 4. Strict Authentication Gate: If not authenticated, render Login Page only
+  if (!currentAdmin) {
+    return <AdminLoginPage onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  const isAdmin = currentAdmin.role === 'admin' || currentAdmin.role === 'super_admin';
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 selection:bg-blue-900 selection:text-white">
@@ -221,7 +262,7 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      {/* Connection Error Banner if Backend is down */}
+      {/* Connection Error Banner if Backend has an issue */}
       {fetchError && (
         <div className="bg-rose-50 border-b border-rose-200 text-rose-800 px-4 py-2 text-xs flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -240,21 +281,24 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 pb-16">
-        {currentView === 'public' ? (
-          <RegistrationForm
-            onSubmit={handleAddRecord}
-            customFields={customFields}
-            nextSerialId={nextId}
-          />
-        ) : (
+        {currentView === 'admin' && isAdmin ? (
           <AdminPortal
             records={records}
             customFields={customFields}
+            currentAdmin={currentAdmin}
+            onAddRecord={handleAddRecord}
             onUpdateRecord={handleUpdateRecord}
             onDeleteRecord={onDeleteRecord}
+            onResetDemoData={handleResetDemoData}
             onAddField={handleAddField}
             onDeleteField={handleDeleteField}
             onMoveField={handleMoveField}
+            nextId={nextId}
+          />
+        ) : (
+          <RegistrationForm
+            onSubmit={handleAddRecord}
+            customFields={customFields}
             nextId={nextId}
           />
         )}
@@ -269,7 +313,7 @@ export default function App() {
         />
       )}
 
-      {/* Official Government Footer */}
+      {/* Official Government Footer: Blue & Gold */}
       <footer className="no-print bg-slate-900 text-slate-300 border-t-4 border-yellow-500 py-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 pb-8 border-b border-slate-800">
@@ -321,23 +365,23 @@ export default function App() {
                   onClick={() => navigateView('public')}
                   className="text-left text-blue-300 hover:text-white transition-colors cursor-pointer"
                 >
-                  • ህዝባዊ የመመዝገቢያ ቅጽ (Public Registration Form)
+                  • የምዝገባ ቅጽ (Registration Form)
                 </button>
-                {currentAdmin && (
+                {isAdmin && (
                   <button
                     type="button"
                     onClick={() => navigateView('admin')}
-                    className="text-left text-blue-300 hover:text-white transition-colors cursor-pointer"
+                    className="text-left text-yellow-400 hover:text-yellow-300 transition-colors cursor-pointer"
                   >
-                    • የአስተዳዳሪ ማስተዳደሪያ ፖርታል (/admin Portal)
+                    • የአስተዳዳሪ ፖርታል (Admin Portal)
                   </button>
                 )}
                 <button
                   type="button"
-                  onClick={handleResetDemoData}
-                  className="text-left text-yellow-400 hover:text-yellow-300 transition-colors cursor-pointer"
+                  onClick={handleLogout}
+                  className="text-left text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
                 >
-                  • የናሙና ዳታዎችን መልስ (Reset Demo Data)
+                  • ከሲስተሙ ውጣ (Logout)
                 </button>
               </div>
             </div>
