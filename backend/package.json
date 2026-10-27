@@ -7,7 +7,13 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": ["express", "fayda", "registry", "addis-ababa", "ethiopia"],
+  "keywords": [
+    "express",
+    "fayda",
+    "registry",
+    "addis-ababa",
+    "ethiopia"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -15,6 +21,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "nsl-beneficiary-fayda-registry-workspace": "file:..",
     "pg": "^8.13.1"
   }
 }

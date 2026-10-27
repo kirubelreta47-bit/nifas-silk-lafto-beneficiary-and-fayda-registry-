@@ -1,4 +1,4 @@
-import { BeneficiaryRecord, CustomFormField } from '../types/registry';
+import { BeneficiaryRecord, CustomFormField, RegistryStats } from '../types/registry';
 import { API_BASE_URL } from '../config/api';
 
 export interface BeneficiaryFilterParams {
@@ -6,21 +6,79 @@ export interface BeneficiaryFilterParams {
   woreda?: string;
   healthStatus?: string;
   category?: string;
+  page?: number;
+  limit?: number;
+  exportAll?: boolean;
+}
+
+export interface BeneficiaryPage {
+  records: BeneficiaryRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface RegistryStatsResponse extends RegistryStats {
+  nextId: number;
 }
 
 // ----------------- Beneficiaries API -----------------
-export async function fetchBeneficiariesApi(filters?: BeneficiaryFilterParams): Promise<BeneficiaryRecord[]> {
+export async function fetchBeneficiariesApi(filters?: BeneficiaryFilterParams): Promise<BeneficiaryPage> {
   const params = new URLSearchParams();
   if (filters?.search) params.append('search', filters.search);
-  if (filters?.woreda && filters.woreda !== 'ሁሉም ወረዳዎች') params.append('woreda', filters.woreda);
-  if (filters?.healthStatus && filters.healthStatus !== 'ሁሉም የጤና ሁኔታዎች') params.append('healthStatus', filters.healthStatus);
-  if (filters?.category && filters.category !== 'ሁሉም መደቦች') params.append('category', filters.category);
+  if (filters?.woreda && filters.woreda !== 'ሁሉም ወረዳዎች' && filters.woreda !== 'all') params.append('woreda', filters.woreda);
+  if (filters?.healthStatus && filters.healthStatus !== 'ሁሉም የጤና ሁኔታዎች' && filters.healthStatus !== 'all') {
+    params.append('healthStatus', filters.healthStatus);
+  }
+  if (filters?.category && filters.category !== 'ሁሉም መደቦች' && filters.category !== 'all') {
+    params.append('category', filters.category);
+  }
+  if (filters?.exportAll) {
+    params.append('export', '1');
+  } else {
+    params.append('page', String(filters?.page || 1));
+    params.append('limit', String(filters?.limit || 40));
+  }
 
   const qs = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`${API_BASE_URL}/beneficiaries${qs}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `የተረጂዎችን መረጃ ማምጣት አልተቻለም (${res.statusText})`);
+  }
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { records: data, total: data.length, page: 1, pageSize: data.length };
+  }
+  return data;
+}
+
+export async function fetchRegistryStatsApi(): Promise<RegistryStatsResponse> {
+  const res = await fetch(`${API_BASE_URL}/beneficiaries/stats`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `ስታትስቲክስ ማምጣት አልተቻለም (${res.statusText})`);
+  }
+  return res.json();
+}
+
+export interface BeneficiaryImportResult {
+  created: BeneficiaryRecord[];
+  skipped: { row?: number; faydaId?: string; reason: string }[];
+  rejected: { row?: number; faydaId?: string; reason: string }[];
+}
+
+export async function importBeneficiariesApi(
+  records: Array<Omit<BeneficiaryRecord, 'id'> & { sourceRow?: number }>
+): Promise<BeneficiaryImportResult> {
+  const res = await fetch(`${API_BASE_URL}/beneficiaries/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ records })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `ከ Excel ማስገባት አልተሳካም (${res.statusText})`);
   }
   return res.json();
 }

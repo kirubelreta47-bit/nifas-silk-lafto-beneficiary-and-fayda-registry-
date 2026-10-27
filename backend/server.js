@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const { query, initDatabase } = require('./db');
+const { query, initDatabase, pool } = require('./db');
 const { INITIAL_BENEFICIARIES, INITIAL_CUSTOM_FIELDS } = require('./initialData');
 
 const app = express();
@@ -18,7 +18,7 @@ app.use(cors({
 }));
 app.options('*', cors());
 
-app.use(express.json());
+app.use(express.json({ limit: '12mb' }));
 
 // Support both /api/<route> and direct /<route> (e.g. /beneficiaries -> /api/beneficiaries)
 app.use((req, _res, next) => {
@@ -105,6 +105,7 @@ app.get(['/', '/api'], (req, res) => {
     endpoints: {
       health: '/api/health',
       beneficiaries: '/api/beneficiaries',
+      importBeneficiaries: '/api/beneficiaries/import',
       customFields: '/api/custom-fields',
       auth: '/api/auth/me'
     }
@@ -130,46 +131,154 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// 2. Beneficiaries: GET /api/beneficiaries (search & filter support)
+function beneficiaryWhere(query) {
+  const conditions = [];
+  const values = [];
+
+  const search = query.search && String(query.search).trim();
+  if (search) {
+    values.push(`%${search}%`);
+    const idx = values.length;
+    conditions.push(`(
+      full_name ILIKE $${idx} OR
+      fayda_id ILIKE $${idx} OR
+      phone ILIKE $${idx} OR
+      locality ILIKE $${idx} OR
+      house_no ILIKE $${idx}
+    )`);
+  }
+
+  if (query.woreda && query.woreda !== 'ሁሉም ወረዳዎች' && query.woreda !== 'all') {
+    values.push(query.woreda);
+    conditions.push(`woreda = $${values.length}`);
+  }
+
+  if (query.healthStatus && query.healthStatus !== 'ሁሉም የጤና ሁኔታዎች' && query.healthStatus !== 'all') {
+    values.push(query.healthStatus);
+    conditions.push(`health_status = $${values.length}`);
+  }
+
+  if (query.category && query.category !== 'ሁሉም መደቦች' && query.category !== 'all') {
+    values.push(query.category);
+    conditions.push(`category = $${values.length}`);
+  }
+
+  return {
+    whereClause: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+    values
+  };
+}
+
+// 2. Beneficiaries: GET /api/beneficiaries/stats (aggregates, no row dump)
+app.get('/api/beneficiaries/stats', async (_req, res) => {
+  try {
+    const grouped = await query(`
+      SELECT
+        GROUPING(woreda) AS g_woreda,
+        GROUPING(health_status) AS g_health,
+        GROUPING(gender) AS g_gender,
+        GROUPING(category) AS g_category,
+        woreda,
+        health_status,
+        gender,
+        category,
+        COUNT(*)::int AS count,
+        COALESCE(SUM(family_total), 0)::int AS family_total,
+        COALESCE(MAX(id), 0)::int AS max_id
+      FROM beneficiaries
+      GROUP BY GROUPING SETS ((), (woreda), (health_status), (gender), (category));
+    `);
+
+    const groupedFlag = (value) => Number(value) === 0;
+    const totalRow = grouped.rows.find((item) =>
+      !groupedFlag(item.g_woreda) && !groupedFlag(item.g_health) && !groupedFlag(item.g_gender) && !groupedFlag(item.g_category)
+    ) || {};
+    const total = Number(totalRow.count) || 0;
+    const male = Number(grouped.rows.find((item) => groupedFlag(item.g_gender) && item.gender === 'ወ')?.count) || 0;
+    const female = Number(grouped.rows.find((item) => groupedFlag(item.g_gender) && item.gender === 'ሴ')?.count) || 0;
+    const workforce = Number(grouped.rows.find((item) => groupedFlag(item.g_category) && item.category === 'ሰሪ ሀይል')?.count) || 0;
+    const continuous = Number(grouped.rows.find((item) => groupedFlag(item.g_category) && item.category === 'በቀጣይነት የሚረዱ')?.count) || 0;
+    const malePercentage = total > 0 ? Math.round((male / total) * 100) : 0;
+
+    res.json({
+      totalBeneficiaries: total,
+      workforceCount: workforce,
+      continuousCount: continuous,
+      totalFamilyMembers: totalRow.family_total || 0,
+      maleBeneficiaries: male,
+      femaleBeneficiaries: female,
+      averageFamilySize: total > 0 ? Number(((totalRow.family_total || 0) / total).toFixed(1)) : 0,
+      nextId: (totalRow.max_id || 0) + 1,
+      woredaDistribution: grouped.rows
+        .filter((item) => groupedFlag(item.g_woreda))
+        .sort((a, b) => Number(b.count) - Number(a.count))
+        .map((item) => ({
+          woreda: item.woreda,
+          count: Number(item.count),
+          percentage: total > 0 ? Math.round((Number(item.count) / total) * 100) : 0
+        })),
+      healthDistribution: grouped.rows
+        .filter((item) => groupedFlag(item.g_health))
+        .sort((a, b) => Number(b.count) - Number(a.count))
+        .map((item) => ({
+          condition: item.health_status,
+          count: Number(item.count),
+          percentage: total > 0 ? Math.round((Number(item.count) / total) * 100) : 0
+        })),
+      genderRatio: {
+        male,
+        female,
+        malePercentage,
+        femalePercentage: total > 0 ? 100 - malePercentage : 0
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching beneficiary stats:', err);
+    res.status(500).json({ error: 'Failed to fetch beneficiary stats' });
+  }
+});
+
+// 2b. Beneficiaries: GET /api/beneficiaries (one page, plus filters)
 app.get('/api/beneficiaries', async (req, res) => {
   try {
-    const { search, woreda, healthStatus, category } = req.query;
+    const { whereClause, values } = beneficiaryWhere(req.query);
+    const exportAll = req.query.export === '1';
+    const pageSize = exportAll
+      ? null
+      : Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 40));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
 
-    const conditions = [];
-    const values = [];
-
-    if (search && String(search).trim()) {
-      values.push(`%${String(search).trim()}%`);
-      const idx = values.length;
-      conditions.push(`(
-        full_name ILIKE $${idx} OR 
-        fayda_id ILIKE $${idx} OR 
-        phone ILIKE $${idx} OR 
-        locality ILIKE $${idx} OR 
-        house_no ILIKE $${idx}
-      )`);
+    const listValues = [...values];
+    let sql;
+    if (exportAll) {
+      sql = `SELECT * FROM beneficiaries ${whereClause} ORDER BY id DESC;`;
+    } else {
+      const limitIdx = listValues.length + 1;
+      const offsetIdx = listValues.length + 2;
+      listValues.push(pageSize, (page - 1) * pageSize);
+      sql = `
+        SELECT page_rows.*, totals.total
+        FROM (
+          SELECT * FROM beneficiaries ${whereClause}
+          ORDER BY id DESC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        ) page_rows
+        RIGHT JOIN (
+          SELECT COUNT(*)::int AS total FROM beneficiaries ${whereClause}
+        ) totals ON TRUE;
+      `;
     }
 
-    if (woreda && woreda !== 'ሁሉም ወረዳዎች') {
-      values.push(woreda);
-      conditions.push(`woreda = $${values.length}`);
-    }
+    const result = await query(sql, listValues);
+    const rows = exportAll ? result.rows : result.rows.filter((row) => row.id != null);
+    const total = exportAll ? rows.length : (result.rows[0]?.total || 0);
 
-    if (healthStatus && healthStatus !== 'ሁሉም የጤና ሁኔታዎች') {
-      values.push(healthStatus);
-      conditions.push(`health_status = $${values.length}`);
-    }
-
-    if (category && category !== 'ሁሉም መደቦች') {
-      values.push(category);
-      conditions.push(`category = $${values.length}`);
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const sql = `SELECT * FROM beneficiaries ${whereClause} ORDER BY id DESC;`;
-
-    const result = await query(sql, values);
-    res.json(result.rows.map(mapRowToBeneficiary));
+    res.json({
+      records: rows.map(mapRowToBeneficiary),
+      total,
+      page: exportAll ? 1 : page,
+      pageSize: exportAll ? total : pageSize
+    });
   } catch (err) {
     console.error('Error fetching beneficiaries:', err);
     res.status(500).json({ error: 'Failed to fetch beneficiaries from database' });
@@ -245,6 +354,155 @@ app.post('/api/beneficiaries', async (req, res) => {
   } catch (err) {
     console.error('Error inserting beneficiary to PostgreSQL:', err);
     res.status(500).json({ error: err.message || 'Failed to save beneficiary to database' });
+  }
+});
+
+function normalizeImportPhone(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.startsWith('251') && digits.length === 12) digits = `0${digits.slice(3)}`;
+  if (digits.length === 9 && digits.startsWith('9')) digits = `0${digits}`;
+  return digits;
+}
+
+function normalizeImportDate(raw) {
+  const text = String(raw || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(text);
+  if (text && !Number.isNaN(parsed.getTime())) return parsed.toISOString().split('T')[0];
+  return new Date().toISOString().split('T')[0];
+}
+
+function normalizeImportGender(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  if (['ሴ', 'ሴት', 'f', 'female', 'woman'].includes(value) || value.startsWith('ሴ')) return 'ሴ';
+  return 'ወ';
+}
+
+function normalizeImportCategory(raw) {
+  const trimmed = String(raw || '').trim();
+  const value = trimmed.toLowerCase();
+  if (trimmed === 'ሰሪ ሀይል' || value.includes('ሰሪ') || value.includes('workforce') || value.includes('worker')) {
+    return 'ሰሪ ሀይል';
+  }
+  return 'በቀጣይነት የሚረዱ';
+}
+
+// 3b. Beneficiaries: POST /api/beneficiaries/import (bulk Excel import)
+app.post('/api/beneficiaries/import', async (req, res) => {
+  const incoming = req.body?.records;
+  if (!Array.isArray(incoming) || incoming.length === 0) {
+    return res.status(400).json({ error: 'የሚገባ መዝገብ አልተገኘም (No records to import)' });
+  }
+  if (incoming.length > 5000) {
+    return res.status(400).json({ error: 'በአንድ ጊዜ ከ5,000 መዝገቦች በላይ ማስገባት አይቻልም' });
+  }
+
+  const prepared = [];
+  const rejected = [];
+  const seen = new Set();
+
+  incoming.forEach((b, index) => {
+    const row = Number(b.sourceRow) || index + 1;
+    const fullName = String(b.fullName || '').trim();
+    const faydaId = String(b.faydaId || '').replace(/\D/g, '');
+    const phone = normalizeImportPhone(b.phone);
+
+    if (!fullName || !faydaId || !phone) {
+      rejected.push({ row, faydaId, reason: 'ሙሉ ስም፣ የፋይዳ መታወቂያ እና ስልክ ቁጥር ያስፈልጋሉ' });
+      return;
+    }
+    if (!/^\d{16}$/.test(faydaId)) {
+      rejected.push({ row, faydaId, reason: 'የፋይዳ ቁጥር ልክ 16 ድጅት መሆን አለበት' });
+      return;
+    }
+    if (phone.length < 9 || phone.length > 13) {
+      rejected.push({ row, faydaId, reason: 'ስልክ ቁጥሩ ትክክል አይመስልም' });
+      return;
+    }
+    if (seen.has(faydaId)) {
+      rejected.push({ row, faydaId, reason: 'በፋይሉ ውስጥ የተደገመ የፋይዳ ቁጥር' });
+      return;
+    }
+    seen.add(faydaId);
+
+    const familyMale = Number(b.familyMale) || 0;
+    const familyFemale = Number(b.familyFemale) || 0;
+    prepared.push({
+      row,
+      fullName,
+      subCity: b.subCity || 'ንፋስ ስልክ ላፍቶ',
+      woreda: b.woreda || 'ለቡ 01',
+      blockZone: b.blockZone || 'ቀጠና 1',
+      locality: b.locality ? String(b.locality).trim() : '',
+      houseNo: b.houseNo ? String(b.houseNo).trim() : '',
+      faydaId,
+      gender: normalizeImportGender(b.gender),
+      age: Number(b.age) || 0,
+      healthStatus: b.healthStatus || 'ጤነኛ',
+      familyMale,
+      familyFemale,
+      familyTotal: Number(b.familyTotal) || (familyMale + familyFemale),
+      phone,
+      category: normalizeImportCategory(b.category),
+      registrationDate: normalizeImportDate(b.registrationDate),
+      customFields: typeof b.customFields === 'object' && b.customFields !== null ? b.customFields : {}
+    });
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const created = [];
+    const skipped = [];
+
+    for (const b of prepared) {
+      const result = await client.query(
+        `
+        INSERT INTO beneficiaries (
+          full_name, sub_city, woreda, block_zone, locality, house_no,
+          fayda_id, gender, age, health_status, family_male, family_female,
+          family_total, phone, category, registration_date, custom_fields
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        ON CONFLICT (fayda_id) DO NOTHING
+        RETURNING *;
+        `,
+        [
+          b.fullName,
+          b.subCity,
+          b.woreda,
+          b.blockZone,
+          b.locality,
+          b.houseNo,
+          b.faydaId,
+          b.gender,
+          b.age,
+          b.healthStatus,
+          b.familyMale,
+          b.familyFemale,
+          b.familyTotal,
+          b.phone,
+          b.category,
+          b.registrationDate,
+          JSON.stringify(b.customFields)
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        skipped.push({ row: b.row, faydaId: b.faydaId, reason: 'ይህ የፋይዳ ቁጥር ቀደም ሲል ተመዝግቧል' });
+      } else {
+        created.push(mapRowToBeneficiary(result.rows[0]));
+      }
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({ created, skipped, rejected });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error importing beneficiaries:', err);
+    res.status(500).json({ error: err.message || 'ከ Excel ማስገባት አልተሳካም' });
+  } finally {
+    client.release();
   }
 });
 

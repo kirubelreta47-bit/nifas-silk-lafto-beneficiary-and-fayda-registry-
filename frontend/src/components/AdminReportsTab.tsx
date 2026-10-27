@@ -1,6 +1,5 @@
 import React from 'react';
-import { BeneficiaryRecord } from '../types/registry';
-import { computeRegistryStats } from '../utils/registryLogic';
+import { RegistryStats } from '../types/registry';
 import {
   Users,
   Briefcase,
@@ -16,12 +15,11 @@ import {
 } from 'lucide-react';
 
 interface AdminReportsTabProps {
-  records: BeneficiaryRecord[];
+  stats: RegistryStats;
   onExportPdf: () => void;
 }
 
-export const AdminReportsTab: React.FC<AdminReportsTabProps> = ({ records, onExportPdf }) => {
-  const stats = computeRegistryStats(records);
+export const AdminReportsTab: React.FC<AdminReportsTabProps> = ({ stats, onExportPdf }) => {
 
   return (
     <div className="space-y-6">

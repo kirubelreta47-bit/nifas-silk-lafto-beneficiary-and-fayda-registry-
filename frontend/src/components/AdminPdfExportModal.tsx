@@ -1,5 +1,5 @@
 import React from 'react';
-import { BeneficiaryRecord, CustomFormField } from '../types/registry';
+import { BeneficiaryRecord, CustomFormField, RegistryStats } from '../types/registry';
 import { CivicEmblem } from './CivicEmblem';
 import { formatFaydaId, computeRegistryStats } from '../utils/registryLogic';
 import { Printer, X, FileText, CheckCircle2 } from 'lucide-react';
@@ -9,6 +9,7 @@ interface AdminPdfExportModalProps {
   activeCategory: 'all' | 'workforce' | 'continuous';
   records: BeneficiaryRecord[];
   filteredRecords: BeneficiaryRecord[];
+  stats?: RegistryStats;
   customFields: CustomFormField[];
   onClose: () => void;
 }
@@ -18,6 +19,7 @@ export const AdminPdfExportModal: React.FC<AdminPdfExportModalProps> = ({
   activeCategory,
   records,
   filteredRecords,
+  stats: statsOverride,
   customFields,
   onClose
 }) => {
@@ -44,7 +46,7 @@ export const AdminPdfExportModal: React.FC<AdminPdfExportModalProps> = ({
   };
 
   // Computations for Analytics
-  const stats = computeRegistryStats(records);
+  const stats = statsOverride || computeRegistryStats(records);
 
   // Computations for Directory table totals
   const totalFamilySum = filteredRecords.reduce((acc, curr) => acc + (curr.familyTotal || 0), 0);
@@ -115,7 +117,7 @@ export const AdminPdfExportModal: React.FC<AdminPdfExportModalProps> = ({
                   {subTab === 'directory' ? `ምድብ: ${getCategoryTitle()}` : subTab === 'reports' ? 'ዓይነት: አጠቃላይ ትንታኔ' : 'ዓይነት: የቅጽ ዝርዝር መዋቅር'}
                 </span>
                 <span className="block text-slate-700">
-                  {subTab === 'directory' ? `የተመዝጋቢ ብዛት: ${filteredRecords.length}` : `ጠቅላላ ተመዝጋቢ: ${records.length}`}
+                  {subTab === 'directory' ? `የዚህ ገጽ ብዛት: ${filteredRecords.length}` : `ጠቅላላ ተመዝጋቢ: ${stats.totalBeneficiaries}`}
                 </span>
                 <span className="block text-slate-500 text-[10px]">ቀን: {currentDate}</span>
               </div>

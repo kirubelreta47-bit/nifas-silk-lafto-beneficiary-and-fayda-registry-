@@ -22,26 +22,36 @@ import {
 
 interface AdminDirectoryTabProps {
   filteredRecords: BeneficiaryRecord[];
-  totalRecordsCount: number;
+  filteredTotal: number;
+  page: number;
+  pageSize: number;
+  listLoading?: boolean;
   customFields: CustomFormField[];
   searchQuery: string;
   onSearchChange: (val: string) => void;
+  onPageChange: (page: number) => void;
   onUpdateRecord: (updated: BeneficiaryRecord) => void;
   onDeleteRecord: (id: number) => void;
   onExportPdf: () => void;
   onExportExcel: () => void;
+  onImportExcel: () => void;
 }
 
 export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
   filteredRecords,
-  totalRecordsCount,
+  filteredTotal,
+  page,
+  pageSize,
+  listLoading = false,
   customFields,
   searchQuery,
   onSearchChange,
+  onPageChange,
   onUpdateRecord,
   onDeleteRecord,
   onExportPdf,
-  onExportExcel
+  onExportExcel,
+  onImportExcel
 }) => {
   // Modals state
   const [editingRecord, setEditingRecord] = useState<BeneficiaryRecord | null>(null);
@@ -50,6 +60,10 @@ export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
   const [copiedFaydaId, setCopiedFaydaId] = useState<number | null>(null);
   // View mode: 'auto' adapts based on screen size (cards on mobile, table on desktop)
   const [viewMode, setViewMode] = useState<'auto' | 'cards' | 'table'>('auto');
+  const pageCount = Math.max(1, Math.ceil(filteredTotal / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = filteredTotal === 0 ? 0 : (currentPage - 1) * pageSize;
+  const pageRows = filteredRecords;
 
   const handleCopyFayda = (id: number, fayda: string) => {
     navigator.clipboard.writeText(fayda);
@@ -115,6 +129,16 @@ export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
 
           <button
             type="button"
+            onClick={onImportExcel}
+            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-700 text-emerald-800 bg-white hover:bg-emerald-50 font-bold text-xs shadow-xs transition-all cursor-pointer"
+            title="ከ Excel ወይም CSV ተመዝጋቢዎችን አስገባ"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>ከ Excel አስገባ</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onExportExcel}
             className="flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
             title="Download UTF-8 BOM CSV compatible with Microsoft Excel"
@@ -138,13 +162,17 @@ export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
 
       {/* ==================== MOBILE/TABLET RESPONSIVE CARDS VIEW ==================== */}
       <div className={viewMode === 'table' ? 'hidden' : viewMode === 'cards' ? 'block' : 'block md:hidden'}>
-        {filteredRecords.length === 0 ? (
+        {listLoading && filteredRecords.length === 0 ? (
+          <div className="bg-white rounded-xl p-8 text-center border border-slate-200 text-slate-500">
+            በመጫን ላይ...
+          </div>
+        ) : filteredRecords.length === 0 ? (
           <div className="bg-white rounded-xl p-8 text-center border border-slate-200 text-slate-500">
             የተፈለገው መረጃ አልተገኘም (No records matched your search query).
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            {filteredRecords.map((r) => (
+            {pageRows.map((r) => (
               <div
                 key={r.id}
                 className="bg-white rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-shadow p-3.5 space-y-3"
@@ -300,7 +328,13 @@ export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredRecords.length === 0 ? (
+              {listLoading && filteredRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={16 + customFields.length} className="py-12 text-center text-slate-500 bg-slate-50">
+                    በመጫን ላይ...
+                  </td>
+                </tr>
+              ) : filteredRecords.length === 0 ? (
                 <tr>
                   <td
                     colSpan={16 + customFields.length}
@@ -310,7 +344,7 @@ export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredRecords.map((r, idx) => (
+                pageRows.map((r, idx) => (
                   <tr
                     key={r.id}
                     className={`hover:bg-blue-50/40 transition-colors ${
@@ -417,6 +451,36 @@ export const AdminDirectoryTab: React.FC<AdminDirectoryTabProps> = ({
           </table>
         </div>
       </div>
+
+      {filteredTotal > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2.5">
+          <p className="text-xs text-slate-600">
+            {pageStart + 1}–{Math.min(pageStart + pageRows.length, filteredTotal)} ከ {filteredTotal}
+            {listLoading ? ' · በመጫን ላይ' : ''}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onPageChange(currentPage - 1)}
+              disabled={currentPage === 1 || listLoading}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 text-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              ቀዳሚ
+            </button>
+            <span className="text-xs font-mono font-bold text-blue-950">
+              {currentPage} / {pageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => onPageChange(currentPage + 1)}
+              disabled={currentPage === pageCount || listLoading}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 text-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              ቀጣይ
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Edit Beneficiary Modal */}
       {editingRecord && (

@@ -1,6 +1,6 @@
 const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
-const { INITIAL_BENEFICIARIES, INITIAL_CUSTOM_FIELDS } = require('./initialData');
+const { INITIAL_CUSTOM_FIELDS } = require('./initialData');
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -54,6 +54,8 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Fayda ID is not unique: the source register includes repeated and incomplete numbers.
 
     // 2. Create custom_fields table
     await client.query(`
@@ -120,9 +122,23 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_beneficiaries_category ON beneficiaries(category);
       CREATE INDEX IF NOT EXISTS idx_beneficiaries_phone ON beneficiaries(phone);
       CREATE INDEX IF NOT EXISTS idx_beneficiaries_name ON beneficiaries(full_name);
+      CREATE INDEX IF NOT EXISTS idx_beneficiaries_health ON beneficiaries(health_status);
+      CREATE INDEX IF NOT EXISTS idx_beneficiaries_id_desc ON beneficiaries(id DESC);
       CREATE INDEX IF NOT EXISTS idx_admins_username ON admins(username);
       CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);
     `);
+
+    try {
+      await client.query('CREATE EXTENSION IF NOT EXISTS pg_trgm;');
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_beneficiaries_name_trgm ON beneficiaries USING gin (full_name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_beneficiaries_fayda_trgm ON beneficiaries USING gin (fayda_id gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_beneficiaries_phone_trgm ON beneficiaries USING gin (phone gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_beneficiaries_locality_trgm ON beneficiaries USING gin (locality gin_trgm_ops);
+      `);
+    } catch (indexErr) {
+      console.warn('Trigram search indexes were not created:', indexErr.message);
+    }
 
     // 5. Seed or Update Default Admins & Users (admin: '123321123', user1: '12345678')
     const adminHash = await bcrypt.hash('123321123', 10);
@@ -166,28 +182,7 @@ async function initDatabase() {
       }
     }
 
-    // 7. Seed sample beneficiaries if empty
-    const benCheck = await client.query('SELECT COUNT(*) FROM beneficiaries;');
-    if (parseInt(benCheck.rows[0].count, 10) === 0) {
-      for (const b of INITIAL_BENEFICIARIES) {
-        await client.query(
-          `INSERT INTO beneficiaries (
-             id, full_name, sub_city, woreda, block_zone, locality, house_no,
-             fayda_id, gender, age, health_status, family_male, family_female,
-             family_total, phone, category, registration_date, custom_fields
-           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-           ON CONFLICT (fayda_id) DO NOTHING;`,
-          [
-            b.id, b.fullName, b.subCity, b.woreda, b.blockZone, b.locality, b.houseNo,
-            b.faydaId, b.gender, b.age, b.healthStatus, b.familyMale, b.familyFemale,
-            b.familyTotal, b.phone, b.category, b.registrationDate || new Date().toISOString().split('T')[0],
-            JSON.stringify(b.customFields || {})
-          ]
-        );
-      }
-      await client.query(`SELECT setval('beneficiaries_id_seq', COALESCE((SELECT MAX(id) FROM beneficiaries), 1));`);
-    }
+    // Beneficiary rows are not seeded. The registry stays empty until records are added.
 
     console.log('✅ PostgreSQL Neon tables (beneficiaries, custom_fields, admins) ready.');
   } catch (err) {

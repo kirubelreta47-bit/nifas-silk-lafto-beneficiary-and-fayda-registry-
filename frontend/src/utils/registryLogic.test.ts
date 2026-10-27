@@ -6,7 +6,9 @@ import {
   calculateFamilyTotal,
   filterBeneficiaries,
   computeRegistryStats,
-  generateCsvExport
+  generateCsvExport,
+  getRegistryExportHeaders,
+  mapSpreadsheetRows
 } from './registryLogic';
 import { BeneficiaryRecord, CustomFormField } from '../types/registry';
 
@@ -136,4 +138,63 @@ test('generateCsvExport produces UTF-8 BOM and valid CSV columns', () => {
   assert.ok(csv.includes('ጊዜ ጥላሁን ገላይ'));
   assert.ok(csv.includes('የድጋፍ አይነት (Aid Type)'));
   assert.ok(csv.includes('የምግብ ድጋፍ'));
+});
+
+test('mapSpreadsheetRows reads registry export headers and skips duplicates', () => {
+  const headers = getRegistryExportHeaders([
+    { id: 'aidType', labelAm: 'የድጋፍ አይነት', labelEn: 'Aid Type', type: 'text', required: false }
+  ]);
+  const result = mapSpreadsheetRows(
+    [
+      ['ንፋስ ስልክ ላፍቶ ክፍለ ከተማ'],
+      [...headers, 'የድጋፍ አይነት (Aid Type)'],
+      ['1', 'አበበ በቀለ', 'ንፋስ ስልክ ላፍቶ', 'ወረዳ 03', 'ቀጠና 2', 'ጎተራ', '12', '1234567890123456', 'female', '30', 'ጤነኛ', '1', '2', '', '251911223344', 'workforce', 'የምግብ ድጋፍ'],
+      ['2', 'ሳራ ተስፋዬ', 'ንፋስ ስልክ ላፍቶ', 'ለቡ 01', 'ቀጠና 1', 'አብርሀሙ', 'ተከራይ', '5475904205272936', 'ሴ', '41', 'ጤነኛ', '0', '1', '1', '0911223344', 'በቀጣይነት የሚረዱ', ''],
+      ['3', '', '', '', '', '', '', '999', '', '', '', '', '', '', '', '']
+    ],
+    [{ id: 'aidType', labelAm: 'የድጋፍ አይነት', labelEn: 'Aid Type', type: 'text', required: false }],
+    ['5475904205272936']
+  );
+
+  assert.equal(result.readyCount, 1);
+  assert.equal(result.duplicateCount, 1);
+  assert.equal(result.invalidCount, 1);
+  assert.equal(result.rows[0].record?.fullName, 'አበበ በቀለ');
+  assert.equal(result.rows[0].record?.faydaId, '1234567890123456');
+  assert.equal(result.rows[0].record?.phone, '0911223344');
+  assert.equal(result.rows[0].record?.gender, 'ሴ');
+  assert.equal(result.rows[0].record?.category, 'ሰሪ ሀይል');
+  assert.equal(result.rows[0].record?.familyTotal, 3);
+  assert.equal(result.rows[0].record?.customFields?.aidType, 'የምግብ ድጋፍ');
+  assert.equal(result.rows[1].status, 'duplicate');
+});
+
+test('mapSpreadsheetRows accepts short English headers', () => {
+  const result = mapSpreadsheetRows(
+    [
+      ['Full Name', 'Fayda ID', 'Phone', 'Gender', 'Woreda'],
+      ['ሙሉ ስም', '1111222233334444', '0911000000', 'ወ', 'ወረዳ 05']
+    ],
+    [],
+    []
+  );
+
+  assert.equal(result.fileError, undefined);
+  assert.equal(result.readyCount, 1);
+  assert.equal(result.rows[0].record?.woreda, 'ወረዳ 05');
+  assert.equal(result.rows[0].record?.gender, 'ወ');
+});
+
+test('mapSpreadsheetRows flags Fayda IDs that Excel stored as imprecise numbers', () => {
+  const result = mapSpreadsheetRows(
+    [
+      ['Full Name', 'Fayda ID', 'Phone'],
+      ['አበበ', '1.234567890123456e+15', '0911000000']
+    ],
+    [],
+    []
+  );
+
+  assert.equal(result.invalidCount, 1);
+  assert.match(result.rows[0].errors[0], /ጽሑፍ/);
 });

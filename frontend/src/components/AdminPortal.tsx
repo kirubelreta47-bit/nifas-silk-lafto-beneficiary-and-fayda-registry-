@@ -1,16 +1,17 @@
-import React, { useState } from 'react';
-import { BeneficiaryRecord, CustomFormField } from '../types/registry';
+import React, { useEffect, useState } from 'react';
+import { BeneficiaryRecord, CustomFormField, RegistryStats } from '../types/registry';
 import { WOREDA_OPTIONS, HEALTH_OPTIONS } from '../data/initialRecords';
 import {
-  filterBeneficiaries,
   generateCsvExport,
   downloadCsv
 } from '../utils/registryLogic';
+import { fetchBeneficiariesApi } from '../services/api';
 import { AdminDirectoryTab } from './AdminDirectoryTab';
 import { AdminReportsTab } from './AdminReportsTab';
 import { AdminFormBuilderTab } from './AdminFormBuilderTab';
 import { AdminUsersTab } from './AdminUsersTab';
 import { AdminPdfExportModal } from './AdminPdfExportModal';
+import { ImportExcelModal } from './ImportExcelModal';
 import { RegistrationForm } from './RegistrationForm';
 import {
   TableProperties,
@@ -19,6 +20,7 @@ import {
   Shield,
   PlusCircle,
   FileSpreadsheet,
+  Upload,
   RotateCcw,
   X,
   Layers,
@@ -31,10 +33,23 @@ import {
 } from 'lucide-react';
 import { AdminUser } from '../types/registry';
 
+export interface DirectoryQuery {
+  page: number;
+  limit: number;
+  search: string;
+  category: 'all' | 'workforce' | 'continuous';
+  woreda: string;
+  health: string;
+}
+
 interface AdminPortalProps {
   records: BeneficiaryRecord[];
+  directoryTotal: number;
+  listLoading: boolean;
+  stats: RegistryStats;
   customFields: CustomFormField[];
   currentAdmin?: AdminUser | null;
+  onDirectoryQuery: (query: DirectoryQuery) => void;
   onAddRecord: (record: Omit<BeneficiaryRecord, 'id'>) => void;
   onUpdateRecord: (updated: BeneficiaryRecord) => void;
   onDeleteRecord: (id: number) => void;
@@ -42,13 +57,18 @@ interface AdminPortalProps {
   onAddField: (field: CustomFormField) => void;
   onDeleteField: (id: string) => void;
   onMoveField: (index: number, direction: 'up' | 'down') => void;
+  onImportRecords: (created: BeneficiaryRecord[]) => void;
   nextId: number;
 }
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({
   records,
+  directoryTotal,
+  listLoading,
+  stats,
   customFields,
   currentAdmin = null,
+  onDirectoryQuery,
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
@@ -56,6 +76,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   onAddField,
   onDeleteField,
   onMoveField,
+  onImportRecords,
   nextId
 }) => {
   // Main section state
@@ -66,32 +87,59 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [woredaFilter, setWoredaFilter] = useState('all');
   const [healthFilter, setHealthFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 40;
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
 
   // Add Beneficiary Modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   // Universal PDF Export Modal state (available for all selected menu parts)
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
-  // Compute tallies
-  const allCount = records.length;
-  const workforceCount = records.filter((r) => r.category === 'ሰሪ ሀይል').length;
-  const continuousCount = records.filter((r) => r.category === 'በቀጣይነት የሚረዱ').length;
+  const allCount = stats.totalBeneficiaries;
+  const workforceCount = stats.workforceCount;
+  const continuousCount = stats.continuousCount;
 
-  // Filtered records based on active sidebar filters
-  const filteredRecords = filterBeneficiaries(
-    records,
-    activeCategory,
-    searchQuery,
-    woredaFilter,
-    healthFilter
-  );
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
-  const handleExportExcel = () => {
-    const csvContent = generateCsvExport(filteredRecords, customFields);
-    const dateStr = new Date().toISOString().split('T')[0];
-    const categoryName = activeCategory === 'all' ? 'All' : activeCategory === 'workforce' ? 'Workforce' : 'Continuous';
-    downloadCsv(csvContent, `Nifas_Silk_Lafto_Registry_${categoryName}_${dateStr}.csv`);
+  useEffect(() => {
+    onDirectoryQuery({
+      page,
+      limit: pageSize,
+      search: debouncedSearch,
+      category: activeCategory,
+      woreda: woredaFilter,
+      health: healthFilter
+    });
+  }, [page, pageSize, debouncedSearch, activeCategory, woredaFilter, healthFilter, onDirectoryQuery]);
+
+  const categoryParam = activeCategory === 'workforce'
+    ? 'ሰሪ ሀይል'
+    : activeCategory === 'continuous'
+      ? 'በቀጣይነት የሚረዱ'
+      : '';
+
+  const handleExportExcel = async () => {
+    try {
+      const exported = await fetchBeneficiariesApi({
+        search: debouncedSearch,
+        woreda: woredaFilter,
+        healthStatus: healthFilter,
+        category: categoryParam,
+        exportAll: true
+      });
+      const csvContent = generateCsvExport(exported.records, customFields);
+      const dateStr = new Date().toISOString().split('T')[0];
+      const categoryName = activeCategory === 'all' ? 'All' : activeCategory === 'workforce' ? 'Workforce' : 'Continuous';
+      downloadCsv(csvContent, `Nifas_Silk_Lafto_Registry_${categoryName}_${dateStr}.csv`);
+    } catch (err: any) {
+      alert(err.message || 'Excel መላክ አልተሳካም');
+    }
   };
 
   const handleAddModalSubmit = (newRec: Omit<BeneficiaryRecord, 'id'>) => {
@@ -105,7 +153,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <div className="flex flex-col lg:flex-row gap-6 items-start">
         {/* ===================== SIDEBAR ===================== */}
-        <aside className="w-full lg:w-72 xl:w-80 shrink-0 space-y-4 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs lg:sticky lg:top-20">
+        <aside className="w-full lg:w-72 xl:w-80 shrink-0 space-y-4 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs lg:sticky lg:top-28">
           {/* Institution / Section Badge */}
           <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
             <div className="w-8 h-8 rounded-lg bg-blue-950 text-yellow-400 flex items-center justify-center font-bold text-xs shadow-xs">
@@ -223,6 +271,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 type="button"
                 onClick={() => {
                   setActiveCategory('all');
+                  setPage(1);
                   if (subTab !== 'directory') setSubTab('directory');
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
@@ -241,6 +290,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 type="button"
                 onClick={() => {
                   setActiveCategory('workforce');
+                  setPage(1);
                   if (subTab !== 'directory') setSubTab('directory');
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
@@ -259,6 +309,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 type="button"
                 onClick={() => {
                   setActiveCategory('continuous');
+                  setPage(1);
                   if (subTab !== 'directory') setSubTab('directory');
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
@@ -290,6 +341,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 value={woredaFilter}
                 onChange={(e) => {
                   setWoredaFilter(e.target.value);
+                  setPage(1);
                   if (subTab !== 'directory') setSubTab('directory');
                 }}
                 className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:border-blue-900"
@@ -312,6 +364,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 value={healthFilter}
                 onChange={(e) => {
                   setHealthFilter(e.target.value);
+                  setPage(1);
                   if (subTab !== 'directory') setSubTab('directory');
                 }}
                 className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:border-blue-900"
@@ -330,7 +383,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               <div className="flex items-center justify-between text-slate-600">
                 <span>የተገኙ ተመዝጋቢዎች:</span>
                 <span className="font-mono font-bold text-blue-950">
-                  {filteredRecords.length} ከ {records.length} ውስጥ
+                  {directoryTotal} ከ {allCount} ውስጥ
                 </span>
               </div>
               {hasActiveFilters && (
@@ -341,6 +394,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     setWoredaFilter('all');
                     setHealthFilter('all');
                     setSearchQuery('');
+                    setPage(1);
                   }}
                   className="mt-1.5 text-[11px] text-blue-900 hover:underline font-semibold block text-left cursor-pointer"
                 >
@@ -367,6 +421,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               <span>አዲስ ተመዝጋቢ ጨምር (Add Beneficiary)</span>
             </button>
 
+            <button
+              type="button"
+              onClick={() => {
+                setSubTab('directory');
+                setIsImportModalOpen(true);
+              }}
+              className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border border-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs transition-all cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>ከ Excel አስገባ (Import Excel)</span>
+            </button>
+
             {/* Reset Demo Data Button */}
             <button
               type="button"
@@ -384,21 +450,29 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         <main className="flex-1 min-w-0 w-full space-y-4">
           {subTab === 'directory' && (
             <AdminDirectoryTab
-              filteredRecords={filteredRecords}
-              totalRecordsCount={records.length}
+              filteredRecords={records}
+              filteredTotal={directoryTotal}
+              page={page}
+              pageSize={pageSize}
+              listLoading={listLoading}
               customFields={customFields}
               searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
+              onSearchChange={(value) => {
+                setSearchQuery(value);
+                setPage(1);
+              }}
+              onPageChange={setPage}
               onUpdateRecord={onUpdateRecord}
               onDeleteRecord={onDeleteRecord}
               onExportPdf={() => setIsPdfModalOpen(true)}
-              onExportExcel={handleExportExcel}
+              onExportExcel={() => { void handleExportExcel(); }}
+              onImportExcel={() => setIsImportModalOpen(true)}
             />
           )}
 
           {subTab === 'reports' && (
             <AdminReportsTab
-              records={records}
+              stats={stats}
               onExportPdf={() => setIsPdfModalOpen(true)}
             />
           )}
@@ -425,9 +499,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
           subTab={subTab}
           activeCategory={activeCategory}
           records={records}
-          filteredRecords={filteredRecords}
+          filteredRecords={records}
+          stats={stats}
           customFields={customFields}
           onClose={() => setIsPdfModalOpen(false)}
+        />
+      )}
+
+      {isImportModalOpen && (
+        <ImportExcelModal
+          customFields={customFields}
+          existingRecords={records}
+          onImported={onImportRecords}
+          onClose={() => setIsImportModalOpen(false)}
         />
       )}
 

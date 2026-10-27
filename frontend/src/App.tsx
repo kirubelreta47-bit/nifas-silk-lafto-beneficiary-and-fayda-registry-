@@ -1,15 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { RegistrationForm } from './components/RegistrationForm';
-import { AdminPortal } from './components/AdminPortal';
+import { AdminPortal, DirectoryQuery } from './components/AdminPortal';
 import { RegistrationSuccessModal } from './components/RegistrationSuccessModal';
-import { AdminLoginPage } from './components/AdminLoginPage';
-import { BeneficiaryRecord, CustomFormField, AdminUser } from './types/registry';
-import { INITIAL_BENEFICIARIES, INITIAL_CUSTOM_FIELDS } from './data/initialRecords';
+import { BeneficiaryRecord, CustomFormField, AdminUser, RegistryStats } from './types/registry';
+import { INITIAL_CUSTOM_FIELDS } from './data/initialRecords';
 import { CivicEmblem } from './components/CivicEmblem';
-import { ShieldCheck, Phone, Mail, MapPin, AlertCircle, RefreshCw } from 'lucide-react';
+import { Phone, Mail, MapPin, AlertCircle, RefreshCw } from 'lucide-react';
 import {
   fetchBeneficiariesApi,
+  fetchRegistryStatsApi,
   createBeneficiaryApi,
   updateBeneficiaryApi,
   deleteBeneficiaryApi,
@@ -19,89 +19,136 @@ import {
   reorderCustomFieldsApi,
   resetDemoDataApi,
   getCurrentAdminApi,
-  logoutAdminApi
+  loginAdminApi
 } from './services/api';
 
-export default function App() {
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(null);
-  const [currentView, setCurrentView] = useState<'public' | 'admin'>('public');
+const EMPTY_STATS: RegistryStats = {
+  totalBeneficiaries: 0,
+  workforceCount: 0,
+  continuousCount: 0,
+  totalFamilyMembers: 0,
+  maleBeneficiaries: 0,
+  femaleBeneficiaries: 0,
+  averageFamilySize: 0,
+  woredaDistribution: [],
+  healthDistribution: [],
+  genderRatio: { male: 0, female: 0, malePercentage: 0, femalePercentage: 0 }
+};
 
-  const [records, setRecords] = useState<BeneficiaryRecord[]>(INITIAL_BENEFICIARIES);
+const OFFICE_ADMIN: AdminUser = {
+  id: 1,
+  username: 'admin',
+  fullName: 'ዋና አስተዳዳሪ',
+  email: 'admin@nslsubcity.gov.et',
+  role: 'admin',
+  woreda: 'ዋና መ/ቤት'
+};
+
+export default function App() {
+  const [currentAdmin, setCurrentAdmin] = useState<AdminUser>(OFFICE_ADMIN);
+  const [currentView, setCurrentView] = useState<'public' | 'admin'>(
+    window.location.pathname.startsWith('/admin') ? 'admin' : 'public'
+  );
+
+  const [records, setRecords] = useState<BeneficiaryRecord[]>([]);
+  const [directoryTotal, setDirectoryTotal] = useState(0);
+  const [listLoading, setListLoading] = useState(false);
+  const [stats, setStats] = useState<RegistryStats>(EMPTY_STATS);
+  const [nextId, setNextId] = useState(1);
   const [customFields, setCustomFields] = useState<CustomFormField[]>(INITIAL_CUSTOM_FIELDS);
-  const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const directoryQueryRef = useRef<DirectoryQuery>({
+    page: 1,
+    limit: 40,
+    search: '',
+    category: 'all',
+    woreda: 'all',
+    health: 'all'
+  });
 
   // Modal for recent submission confirmation
   const [recentSubmission, setRecentSubmission] = useState<BeneficiaryRecord | null>(null);
 
-  // 1. Initial Authentication Check on Load
+  // Keep a server session for user management without showing a login screen.
   useEffect(() => {
     let isMounted = true;
-    getCurrentAdminApi()
-      .then((user) => {
-        if (!isMounted) return;
-        if (user) {
-          setCurrentAdmin(user);
-          const isAdmin = user.role === 'admin' || user.role === 'super_admin';
-          if (isAdmin && window.location.pathname.startsWith('/admin')) {
-            setCurrentView('admin');
-          } else {
-            setCurrentView(isAdmin && window.location.pathname.startsWith('/admin') ? 'admin' : 'public');
-          }
-        } else {
-          setCurrentAdmin(null);
-        }
-      })
-      .catch(() => {
-        if (isMounted) setCurrentAdmin(null);
-      })
-      .finally(() => {
-        if (isMounted) setIsCheckingAuth(false);
-      });
-
+    (async () => {
+      const existing = await getCurrentAdminApi();
+      if (!isMounted) return;
+      if (existing) {
+        setCurrentAdmin(existing);
+        return;
+      }
+      try {
+        const response = await loginAdminApi('admin', '123321123');
+        if (isMounted && response.user) setCurrentAdmin(response.user);
+      } catch {
+        // Beneficiary registration and the directory do not require a session.
+      }
+    })();
     return () => {
       isMounted = false;
     };
   }, []);
 
-  // 2. Load real data from backend API once authenticated
-  const loadData = useCallback(async () => {
-    setIsLoading(true);
+  const loadStats = useCallback(async () => {
+    const next = await fetchRegistryStatsApi();
+    setStats(next);
+    setNextId(next.nextId || 1);
+  }, []);
+
+  const loadDirectory = useCallback(async (query: DirectoryQuery) => {
+    directoryQueryRef.current = query;
+    setListLoading(true);
     setFetchError(null);
     try {
-      const [dbRecords, dbFields] = await Promise.all([
-        fetchBeneficiariesApi(),
-        fetchCustomFieldsApi()
-      ]);
-      if (Array.isArray(dbRecords)) {
-        setRecords(dbRecords);
-      }
-      if (Array.isArray(dbFields) && dbFields.length > 0) {
-        setCustomFields(dbFields);
-      }
+      const category = query.category === 'workforce'
+        ? 'ሰሪ ሀይል'
+        : query.category === 'continuous'
+          ? 'በቀጣይነት የሚረዱ'
+          : '';
+      const page = await fetchBeneficiariesApi({
+        search: query.search,
+        woreda: query.woreda,
+        healthStatus: query.health,
+        category,
+        page: query.page,
+        limit: query.limit
+      });
+      setRecords(page.records);
+      setDirectoryTotal(page.total);
     } catch (err: any) {
-      console.error('Failed to load data from server:', err);
+      console.error('Failed to load directory page:', err);
       setFetchError(err.message || 'ከዳታቤዝ መረጃ ማምጣት አልተቻለም');
     } finally {
-      setIsLoading(false);
+      setListLoading(false);
     }
   }, []);
 
+  const refreshRegistry = useCallback(async () => {
+    await Promise.all([loadStats(), loadDirectory(directoryQueryRef.current)]);
+  }, [loadStats, loadDirectory]);
+
   useEffect(() => {
-    if (currentAdmin) {
-      loadData();
-    }
-  }, [currentAdmin, loadData]);
+    let isMounted = true;
+    Promise.all([fetchRegistryStatsApi(), fetchCustomFieldsApi()])
+      .then(([nextStats, dbFields]) => {
+        if (!isMounted) return;
+        setStats(nextStats);
+        setNextId(nextStats.nextId || 1);
+        if (Array.isArray(dbFields) && dbFields.length > 0) setCustomFields(dbFields);
+      })
+      .catch((err: any) => {
+        if (isMounted) setFetchError(err.message || 'ከዳታቤዝ መረጃ ማምጣት አልተቻለም');
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
-  // Sync route with URL navigation (/ and /admin)
   const navigateView = (view: 'public' | 'admin') => {
-    const isAdmin = currentAdmin?.role === 'admin' || currentAdmin?.role === 'super_admin';
-    // User role can only access public registration form
-    const allowedView = !isAdmin ? 'public' : view;
-
-    setCurrentView(allowedView);
-    const targetPath = allowedView === 'admin' ? '/admin' : '/';
+    setCurrentView(view);
+    const targetPath = view === 'admin' ? '/admin' : '/';
     if (window.location.pathname !== targetPath) {
       window.history.pushState({}, '', targetPath);
     }
@@ -109,68 +156,42 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      const path = window.location.pathname;
-      const isAdmin = currentAdmin?.role === 'admin' || currentAdmin?.role === 'super_admin';
-      if (path.startsWith('/admin') && isAdmin) {
-        setCurrentView('admin');
-      } else {
-        setCurrentView('public');
-      }
+      setCurrentView(window.location.pathname.startsWith('/admin') ? 'admin' : 'public');
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [currentAdmin]);
+  }, []);
 
-  const handleLoginSuccess = (user: AdminUser) => {
-    setCurrentAdmin(user);
-    const isAdmin = user.role === 'admin' || user.role === 'super_admin';
-    if (isAdmin) {
-      navigateView('admin');
-    } else {
-      navigateView('public');
-    }
+  const handleImportRecords = async (_created: BeneficiaryRecord[]) => {
+    await refreshRegistry();
   };
 
-  const handleLogout = async () => {
-    await logoutAdminApi();
-    setCurrentAdmin(null);
-    setCurrentView('public');
-  };
-
-  // Calculate next Serial ID for display
-  const nextId = records.length > 0
-    ? Math.max(...records.map((r) => r.id || 0)) + 1
-    : 1;
-
-  // Add Beneficiary Handler (direct database call)
   const handleAddRecord = async (recordData: Omit<BeneficiaryRecord, 'id'>) => {
     try {
       const created = await createBeneficiaryApi(recordData);
-      setRecords((prev) => [created, ...prev.filter((r) => r.id !== created.id)]);
       setRecentSubmission(created);
+      await refreshRegistry();
     } catch (err: any) {
       console.error('Registration failed:', err);
       alert(err.message || 'ምዝገባው አልተሳካም። እባክዎ እንደገና ይሞክሩ።');
     }
   };
 
-  // Update Beneficiary Handler
   const handleUpdateRecord = async (updated: BeneficiaryRecord) => {
     try {
-      const saved = await updateBeneficiaryApi(updated);
-      setRecords((prev) => prev.map((r) => (r.id === saved.id ? saved : r)));
+      await updateBeneficiaryApi(updated);
+      await refreshRegistry();
     } catch (err: any) {
       console.error('Update failed:', err);
       alert(err.message || 'መረጃውን ማደስ አልተሳካም');
     }
   };
 
-  // Delete Beneficiary Handler
   const onDeleteRecord = async (id: number) => {
     try {
       await deleteBeneficiaryApi(id);
-      setRecords((prev) => prev.filter((r) => r.id !== id));
+      await refreshRegistry();
     } catch (err: any) {
       console.error('Delete failed:', err);
       alert(err.message || 'መረጃውን መሰረዝ አልተሳካም');
@@ -182,8 +203,8 @@ export default function App() {
     if (window.confirm('ሁሉንም መረጃዎች ወደ መጀመሪያው የንፋስ ስልክ ላፍቶ ናሙና መረጃዎች መመለስ ይፈልጋሉ? (Reset all records in database?)')) {
       try {
         const res = await resetDemoDataApi();
-        setRecords(res.records);
         setCustomFields(res.customFields);
+        await refreshRegistry();
       } catch (err: any) {
         console.error('Failed to reset demo data:', err);
         alert(err.message || 'ናሙና ዳታዎችን መመለስ አልተቻለም');
@@ -228,38 +249,13 @@ export default function App() {
     }
   };
 
-  // 3. Fast Loading Screen on mount while checking session
-  if (isCheckingAuth) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-blue-950 text-white p-4 selection:bg-yellow-500">
-        <CivicEmblem size={64} className="animate-pulse drop-shadow-lg" />
-        <h2 className="text-sm sm:text-base font-bold mt-4 tracking-tight text-white">
-          በንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር
-        </h2>
-        <p className="text-xs text-yellow-400 mt-1">
-          የተረጂዎች እና የፋይዳ ምዝገባ ሲስተም (Beneficiary & Fayda Registry)
-        </p>
-        <div className="w-6 h-6 border-2 border-yellow-400/30 border-t-yellow-400 rounded-full animate-spin mt-6" />
-      </div>
-    );
-  }
-
-  // 4. Strict Authentication Gate: If not authenticated, render Login Page only
-  if (!currentAdmin) {
-    return <AdminLoginPage onLoginSuccess={handleLoginSuccess} />;
-  }
-
-  const isAdmin = currentAdmin.role === 'admin' || currentAdmin.role === 'super_admin';
-
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 selection:bg-blue-900 selection:text-white">
       {/* Top Navigation Header */}
       <Header
         currentView={currentView}
         onViewChange={navigateView}
-        totalRecordsCount={records.length}
-        currentUser={currentAdmin}
-        onLogout={handleLogout}
+        totalRecordsCount={stats.totalBeneficiaries}
       />
 
       {/* Connection Error Banner if Backend has an issue */}
@@ -271,7 +267,7 @@ export default function App() {
           </div>
           <button
             type="button"
-            onClick={loadData}
+            onClick={() => { void refreshRegistry(); }}
             className="flex items-center gap-1 font-bold underline hover:text-rose-950 cursor-pointer"
           >
             <RefreshCw className="w-3 h-3" /> እንደገና ሞክር (Retry)
@@ -281,10 +277,14 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 pb-16">
-        {currentView === 'admin' && isAdmin ? (
+        {currentView === 'admin' ? (
           <AdminPortal
             records={records}
+            directoryTotal={directoryTotal}
+            listLoading={listLoading}
+            stats={stats}
             customFields={customFields}
+            onDirectoryQuery={loadDirectory}
             currentAdmin={currentAdmin}
             onAddRecord={handleAddRecord}
             onUpdateRecord={handleUpdateRecord}
@@ -293,6 +293,7 @@ export default function App() {
             onAddField={handleAddField}
             onDeleteField={handleDeleteField}
             onMoveField={handleMoveField}
+            onImportRecords={handleImportRecords}
             nextId={nextId}
           />
         ) : (
@@ -338,11 +339,12 @@ export default function App() {
             {/* Sub-City Offices & Contact */}
             <div className="space-y-2 text-xs">
               <h5 className="font-bold text-white uppercase tracking-wider text-xs border-b border-slate-800 pb-1.5">
-                አድራሻ እና የስራ ሰዓት (Office Location)
+                አድራሻ (Location)
               </h5>
+              <p className="font-bold text-yellow-400">ሃይሌ ጋርመንት · Hayle Garment</p>
               <p className="flex items-start gap-2 text-slate-400">
                 <MapPin className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
-                <span>አዲስ አበባ፣ ንፋስ ስልክ ላፍቶ ክፍለ ከተማ ዋና መ/ቤት፣ ለቡ መብራት ኃይል አደባባይ አጠገብ</span>
+                <span>አዲስ አበባ፣ ንፋስ ስልክ ላፍቶ ክፍለ ከተማ፣ ሃይሌ ጋርመንት አደባባይ፣ ቀበሌ 49</span>
               </p>
               <p className="flex items-center gap-2 text-slate-400">
                 <Phone className="w-4 h-4 text-yellow-400 shrink-0" />
@@ -367,21 +369,12 @@ export default function App() {
                 >
                   • የምዝገባ ቅጽ (Registration Form)
                 </button>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => navigateView('admin')}
-                    className="text-left text-yellow-400 hover:text-yellow-300 transition-colors cursor-pointer"
-                  >
-                    • የአስተዳዳሪ ፖርታል (Admin Portal)
-                  </button>
-                )}
                 <button
                   type="button"
-                  onClick={handleLogout}
-                  className="text-left text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
+                  onClick={() => navigateView('admin')}
+                  className="text-left text-yellow-400 hover:text-yellow-300 transition-colors cursor-pointer"
                 >
-                  • ከሲስተሙ ውጣ (Logout)
+                  • የተመዝጋቢዎች ዝርዝር (Registry)
                 </button>
               </div>
             </div>
@@ -391,9 +384,9 @@ export default function App() {
             <p>
               © {new Date().getFullYear()} በንፋስ ስልክ ላፍቶ ክፍለ ከተማ አስተዳደር። መብቱ በህግ የተጠበቀ ነው።
             </p>
-            <p className="flex items-center gap-1.5 text-slate-400">
-              <ShieldCheck className="w-4 h-4 text-yellow-500" />
-              <span>ኦፊሴላዊ የሲቪክ መረጃ አስተዳደር ሲስተም</span>
+            <p className="flex items-center gap-1.5 text-slate-300">
+              <MapPin className="w-4 h-4 text-yellow-500 shrink-0" />
+              <span>ሃይሌ ጋርመንት፣ ንፋስ ስልክ ላፍቶ፣ አዲስ አበባ</span>
             </p>
           </div>
         </div>

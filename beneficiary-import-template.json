@@ -1,0 +1,26 @@
+{
+  "records": [
+    {
+      "fullName": "",
+      "subCity": "ንፋስ ስልክ ላፍቶ",
+      "woreda": "ለቡ 01",
+      "blockZone": "ቀጠና 1",
+      "locality": "",
+      "houseNo": "",
+      "faydaId": "",
+      "gender": "ሴ",
+      "age": 0,
+      "healthStatus": "ጤነኛ",
+      "familyMale": 0,
+      "familyFemale": 0,
+      "familyTotal": 0,
+      "phone": "",
+      "category": "በቀጣይነት የሚረዱ",
+      "registrationDate": "",
+      "customFields": {
+        "aidType": "",
+        "educationLevel": ""
+      }
+    }
+  ]
+}
