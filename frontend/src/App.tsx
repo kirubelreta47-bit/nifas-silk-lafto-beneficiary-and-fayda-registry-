@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { RegistrationForm } from './components/RegistrationForm';
 import { AdminPortal, DirectoryQuery } from './components/AdminPortal';
+import { AdminLoginPage } from './components/AdminLoginPage';
 import { RegistrationSuccessModal } from './components/RegistrationSuccessModal';
 import { BeneficiaryRecord, CustomFormField, AdminUser, RegistryStats } from './types/registry';
 import { INITIAL_CUSTOM_FIELDS } from './data/initialRecords';
@@ -17,9 +18,8 @@ import {
   createCustomFieldApi,
   deleteCustomFieldApi,
   reorderCustomFieldsApi,
-  resetDemoDataApi,
   getCurrentAdminApi,
-  loginAdminApi
+  logoutAdminApi
 } from './services/api';
 
 const EMPTY_STATS: RegistryStats = {
@@ -35,17 +35,9 @@ const EMPTY_STATS: RegistryStats = {
   genderRatio: { male: 0, female: 0, malePercentage: 0, femalePercentage: 0 }
 };
 
-const OFFICE_ADMIN: AdminUser = {
-  id: 1,
-  username: 'admin',
-  fullName: 'ዋና አስተዳዳሪ',
-  email: 'admin@nslsubcity.gov.et',
-  role: 'admin',
-  woreda: 'ዋና መ/ቤት'
-};
-
 export default function App() {
-  const [currentAdmin, setCurrentAdmin] = useState<AdminUser>(OFFICE_ADMIN);
+  const [authReady, setAuthReady] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(null);
   const [currentView, setCurrentView] = useState<'public' | 'admin'>(
     window.location.pathname.startsWith('/admin') ? 'admin' : 'public'
   );
@@ -69,23 +61,15 @@ export default function App() {
   // Modal for recent submission confirmation
   const [recentSubmission, setRecentSubmission] = useState<BeneficiaryRecord | null>(null);
 
-  // Keep a server session for user management without showing a login screen.
   useEffect(() => {
     let isMounted = true;
-    (async () => {
-      const existing = await getCurrentAdminApi();
-      if (!isMounted) return;
-      if (existing) {
-        setCurrentAdmin(existing);
-        return;
-      }
-      try {
-        const response = await loginAdminApi('admin', '123321123');
-        if (isMounted && response.user) setCurrentAdmin(response.user);
-      } catch {
-        // Beneficiary registration and the directory do not require a session.
-      }
-    })();
+    getCurrentAdminApi()
+      .then((existing) => {
+        if (isMounted) setCurrentAdmin(existing);
+      })
+      .finally(() => {
+        if (isMounted) setAuthReady(true);
+      });
     return () => {
       isMounted = false;
     };
@@ -130,6 +114,7 @@ export default function App() {
   }, [loadStats, loadDirectory]);
 
   useEffect(() => {
+    if (!currentAdmin) return;
     let isMounted = true;
     Promise.all([fetchRegistryStatsApi(), fetchCustomFieldsApi()])
       .then(([nextStats, dbFields]) => {
@@ -144,7 +129,18 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [currentAdmin]);
+
+  const handleLogout = async () => {
+    await logoutAdminApi();
+    setCurrentAdmin(null);
+    setRecords([]);
+    setDirectoryTotal(0);
+    setStats(EMPTY_STATS);
+    setRecentSubmission(null);
+    setFetchError(null);
+    navigateView('public');
+  };
 
   const navigateView = (view: 'public' | 'admin') => {
     setCurrentView(view);
@@ -198,20 +194,6 @@ export default function App() {
     }
   };
 
-  // Reset Demo Data
-  const handleResetDemoData = async () => {
-    if (window.confirm('ሁሉንም መረጃዎች ወደ መጀመሪያው የንፋስ ስልክ ላፍቶ ናሙና መረጃዎች መመለስ ይፈልጋሉ? (Reset all records in database?)')) {
-      try {
-        const res = await resetDemoDataApi();
-        setCustomFields(res.customFields);
-        await refreshRegistry();
-      } catch (err: any) {
-        console.error('Failed to reset demo data:', err);
-        alert(err.message || 'ናሙና ዳታዎችን መመለስ አልተቻለም');
-      }
-    }
-  };
-
   // Custom Field Management
   const handleAddField = async (newField: CustomFormField) => {
     try {
@@ -251,11 +233,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 selection:bg-blue-900 selection:text-white">
-      {/* Top Navigation Header */}
+      {!authReady ? (
+        <div className="min-h-screen bg-blue-950 text-white flex items-center justify-center">
+          <p className="text-sm font-bold text-yellow-300">መግቢያ በመፈተሽ ላይ...</p>
+        </div>
+      ) : !currentAdmin ? (
+        <AdminLoginPage onLoginSuccess={setCurrentAdmin} />
+      ) : (
+        <>
       <Header
         currentView={currentView}
         onViewChange={navigateView}
         totalRecordsCount={stats.totalBeneficiaries}
+        currentAdmin={currentAdmin}
+        onLogout={() => { void handleLogout(); }}
       />
 
       {/* Connection Error Banner if Backend has an issue */}
@@ -289,7 +280,6 @@ export default function App() {
             onAddRecord={handleAddRecord}
             onUpdateRecord={handleUpdateRecord}
             onDeleteRecord={onDeleteRecord}
-            onResetDemoData={handleResetDemoData}
             onAddField={handleAddField}
             onDeleteField={handleDeleteField}
             onMoveField={handleMoveField}
@@ -391,6 +381,8 @@ export default function App() {
           </div>
         </div>
       </footer>
+        </>
+      )}
     </div>
   );
 }

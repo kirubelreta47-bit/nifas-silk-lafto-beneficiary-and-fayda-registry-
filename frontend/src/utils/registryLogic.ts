@@ -84,6 +84,45 @@ export function filterBeneficiaries(
   });
 }
 
+const OFFICIAL_HEALTH = [
+  'ጤነኛ',
+  'አካል ጉዳት',
+  'ልብ ድካም',
+  'ታማሚ',
+  'ውስጥ ደዌ',
+  'የስኳር ህመም',
+  'የደም ግፊት'
+];
+
+/** Fold free-text health values into the official categories used on the form. */
+export function groupHealthDistribution(
+  items: { condition: string; count: number }[],
+  total: number
+): { condition: string; count: number; percentage: number }[] {
+  const buckets = new Map(OFFICIAL_HEALTH.map((name) => [name, 0]));
+  let other = 0;
+  items.forEach((item) => {
+    const name = String(item.condition || '').trim();
+    if (buckets.has(name)) buckets.set(name, (buckets.get(name) || 0) + item.count);
+    else other += item.count;
+  });
+  const rows = [...buckets.entries()]
+    .filter(([, count]) => count > 0)
+    .map(([condition, count]) => ({
+      condition,
+      count,
+      percentage: total > 0 ? Math.round((count / total) * 100) : 0
+    }));
+  if (other > 0) {
+    rows.push({
+      condition: 'ሌላ',
+      count: other,
+      percentage: total > 0 ? Math.round((other / total) * 100) : 0
+    });
+  }
+  return rows.sort((a, b) => b.count - a.count);
+}
+
 /**
  * Computes registry analytics and metrics.
  */

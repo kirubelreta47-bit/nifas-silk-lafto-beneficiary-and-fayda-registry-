@@ -41,7 +41,7 @@ export async function fetchBeneficiariesApi(filters?: BeneficiaryFilterParams): 
   }
 
   const qs = params.toString() ? `?${params.toString()}` : '';
-  const res = await fetch(`${API_BASE_URL}/beneficiaries${qs}`);
+  const res = await fetch(`${API_BASE_URL}/beneficiaries${qs}`, { headers: withAuth() });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `የተረጂዎችን መረጃ ማምጣት አልተቻለም (${res.statusText})`);
@@ -53,8 +53,42 @@ export async function fetchBeneficiariesApi(filters?: BeneficiaryFilterParams): 
   return data;
 }
 
+export interface ReportSlice {
+  groupBy: string;
+  splitBy: string;
+  metric: string;
+  truncated: boolean;
+  series: string[];
+  rows: {
+    label: string;
+    people: number;
+    total: number;
+    parts: { key: string; value: number }[];
+  }[];
+}
+
+export async function fetchReportSliceApi(options: {
+  groupBy: string;
+  splitBy: string;
+  metric: string;
+  top: number;
+}): Promise<ReportSlice> {
+  const params = new URLSearchParams({
+    groupBy: options.groupBy,
+    splitBy: options.splitBy,
+    metric: options.metric,
+    top: String(options.top)
+  });
+  const res = await fetch(`${API_BASE_URL}/beneficiaries/report?${params.toString()}`, { headers: withAuth() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `ሪፖርቱን ማምጣት አልተቻለም (${res.statusText})`);
+  }
+  return res.json();
+}
+
 export async function fetchRegistryStatsApi(): Promise<RegistryStatsResponse> {
-  const res = await fetch(`${API_BASE_URL}/beneficiaries/stats`);
+  const res = await fetch(`${API_BASE_URL}/beneficiaries/stats`, { headers: withAuth() });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `ስታትስቲክስ ማምጣት አልተቻለም (${res.statusText})`);
@@ -73,7 +107,7 @@ export async function importBeneficiariesApi(
 ): Promise<BeneficiaryImportResult> {
   const res = await fetch(`${API_BASE_URL}/beneficiaries/import`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuth({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ records })
   });
   if (!res.ok) {
@@ -86,7 +120,7 @@ export async function importBeneficiariesApi(
 export async function createBeneficiaryApi(record: Omit<BeneficiaryRecord, 'id'>): Promise<BeneficiaryRecord> {
   const res = await fetch(`${API_BASE_URL}/beneficiaries`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuth({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(record)
   });
   if (!res.ok) {
@@ -99,7 +133,7 @@ export async function createBeneficiaryApi(record: Omit<BeneficiaryRecord, 'id'>
 export async function updateBeneficiaryApi(record: BeneficiaryRecord): Promise<BeneficiaryRecord> {
   const res = await fetch(`${API_BASE_URL}/beneficiaries/${record.id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuth({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(record)
   });
   if (!res.ok) {
@@ -111,7 +145,8 @@ export async function updateBeneficiaryApi(record: BeneficiaryRecord): Promise<B
 
 export async function deleteBeneficiaryApi(id: number): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/beneficiaries/${id}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: withAuth()
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -121,7 +156,7 @@ export async function deleteBeneficiaryApi(id: number): Promise<void> {
 
 // ----------------- Custom Form Fields API -----------------
 export async function fetchCustomFieldsApi(): Promise<CustomFormField[]> {
-  const res = await fetch(`${API_BASE_URL}/custom-fields`);
+  const res = await fetch(`${API_BASE_URL}/custom-fields`, { headers: withAuth() });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `ተጨማሪ ቅጾችን ማምጣት አልተቻለም (${res.statusText})`);
@@ -132,7 +167,7 @@ export async function fetchCustomFieldsApi(): Promise<CustomFormField[]> {
 export async function createCustomFieldApi(field: CustomFormField): Promise<CustomFormField> {
   const res = await fetch(`${API_BASE_URL}/custom-fields`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuth({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(field)
   });
   if (!res.ok) {
@@ -144,7 +179,8 @@ export async function createCustomFieldApi(field: CustomFormField): Promise<Cust
 
 export async function deleteCustomFieldApi(id: string): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/custom-fields/${id}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: withAuth()
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -155,7 +191,7 @@ export async function deleteCustomFieldApi(id: string): Promise<void> {
 export async function reorderCustomFieldsApi(fieldIds: string[]): Promise<CustomFormField[]> {
   const res = await fetch(`${API_BASE_URL}/custom-fields/reorder`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuth({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ fieldIds })
   });
   if (!res.ok) {
@@ -165,19 +201,14 @@ export async function reorderCustomFieldsApi(fieldIds: string[]): Promise<Custom
   return res.json();
 }
 
-export async function resetDemoDataApi(): Promise<{ records: BeneficiaryRecord[]; customFields: CustomFormField[] }> {
-  const res = await fetch(`${API_BASE_URL}/reset-demo`, {
-    method: 'POST'
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `ናሙና መረጃዎችን መመለስ አልተቻለም (${res.statusText})`);
-  }
-  return res.json();
-}
-
 // ----------------- Authentication -----------------
 const AUTH_TOKEN_KEY = 'nsl_admin_token_v1';
+
+function withAuth(headers: Record<string, string> = {}): Record<string, string> {
+  const token = getStoredAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
 export function getStoredAuthToken(): string | null {
   try {

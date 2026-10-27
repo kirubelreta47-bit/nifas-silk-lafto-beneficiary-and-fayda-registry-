@@ -19,14 +19,10 @@ import {
   Sliders,
   Shield,
   PlusCircle,
-  FileSpreadsheet,
   Upload,
-  RotateCcw,
   X,
   Layers,
   Filter,
-  FileText,
-  Printer,
   ChevronDown,
   ChevronUp,
   Users
@@ -53,7 +49,6 @@ interface AdminPortalProps {
   onAddRecord: (record: Omit<BeneficiaryRecord, 'id'>) => void;
   onUpdateRecord: (updated: BeneficiaryRecord) => void;
   onDeleteRecord: (id: number) => void;
-  onResetDemoData: () => void;
   onAddField: (field: CustomFormField) => void;
   onDeleteField: (id: string) => void;
   onMoveField: (index: number, direction: 'up' | 'down') => void;
@@ -72,7 +67,6 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   onAddRecord,
   onUpdateRecord,
   onDeleteRecord,
-  onResetDemoData,
   onAddField,
   onDeleteField,
   onMoveField,
@@ -91,6 +85,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [page, setPage] = useState(1);
   const pageSize = 40;
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const isAdmin = currentAdmin?.role === 'admin' || currentAdmin?.role === 'super_admin';
 
   // Add Beneficiary Modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -117,6 +112,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       health: healthFilter
     });
   }, [page, pageSize, debouncedSearch, activeCategory, woredaFilter, healthFilter, onDirectoryQuery]);
+
+  useEffect(() => {
+    if (!isAdmin && (subTab === 'users' || subTab === 'formBuilder')) {
+      setSubTab('directory');
+    }
+  }, [isAdmin, subTab]);
 
   const categoryParam = activeCategory === 'workforce'
     ? 'ሰሪ ሀይል'
@@ -159,11 +160,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
             <div className="w-8 h-8 rounded-lg bg-blue-950 text-yellow-400 flex items-center justify-center font-bold text-xs shadow-xs">
               <Shield className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-xs font-bold uppercase tracking-wider text-blue-950 leading-tight">
-                የአስተዳዳሪ ማስተባበሪያ
+                {currentAdmin?.fullName || 'የሰራተኛ መዝገብ'}
               </h2>
-              <p className="text-[11px] text-slate-500 leading-tight">Admin Management Panel</p>
+              <p className="text-[11px] text-slate-500 leading-tight">
+                {isAdmin ? 'አስተዳዳሪ' : 'መዝጋቢ'} · ሃይሌ ጋርመንት
+              </p>
             </div>
           </div>
 
@@ -208,6 +211,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               </div>
             </button>
 
+            {isAdmin && (
             <button
               type="button"
               onClick={() => setSubTab('formBuilder')}
@@ -225,7 +229,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 {customFields.length}
               </span>
             </button>
+            )}
 
+            {isAdmin && (
             <button
               type="button"
               onClick={() => setSubTab('users')}
@@ -237,9 +243,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
             >
               <div className="flex items-center gap-2.5">
                 <Users className="w-4 h-4 text-yellow-400" />
-                <span>ተጠቃሚዎች (Users)</span>
+                <span>ተጠቃሚዎች</span>
               </div>
             </button>
+            )}
           </div>
 
           {/* Mobile Collapsible Toggle for Categories & Filters */}
@@ -430,18 +437,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border border-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs transition-all cursor-pointer"
             >
               <Upload className="w-4 h-4" />
-              <span>ከ Excel አስገባ (Import Excel)</span>
-            </button>
-
-            {/* Reset Demo Data Button */}
-            <button
-              type="button"
-              onClick={onResetDemoData}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors cursor-pointer"
-              title="የናሙና ዳታዎችን መልስ (Reset Demo Data)"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-              <span>ዳታውን አድስ (Reset Data)</span>
+              <span>ከ Excel አስገባ</span>
             </button>
           </div>
         </aside>
@@ -473,6 +469,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
           {subTab === 'reports' && (
             <AdminReportsTab
               stats={stats}
+              customFields={customFields}
               onExportPdf={() => setIsPdfModalOpen(true)}
             />
           )}

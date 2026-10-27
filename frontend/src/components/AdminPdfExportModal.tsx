@@ -1,7 +1,7 @@
 import React from 'react';
 import { BeneficiaryRecord, CustomFormField, RegistryStats } from '../types/registry';
 import { CivicEmblem } from './CivicEmblem';
-import { formatFaydaId, computeRegistryStats } from '../utils/registryLogic';
+import { formatFaydaId, computeRegistryStats, groupHealthDistribution } from '../utils/registryLogic';
 import { Printer, X, FileText, CheckCircle2 } from 'lucide-react';
 
 interface AdminPdfExportModalProps {
@@ -309,7 +309,7 @@ export const AdminPdfExportModal: React.FC<AdminPdfExportModalProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                      {stats.healthDistribution.map((h) => (
+                      {groupHealthDistribution(stats.healthDistribution, stats.totalBeneficiaries).map((h) => (
                         <tr key={h.condition}>
                           <td className="p-1.5 font-medium">{h.condition}</td>
                           <td className="p-1.5 text-center font-mono font-bold text-blue-950">{h.count}</td>

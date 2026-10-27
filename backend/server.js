@@ -4,7 +4,6 @@ const cors = require('cors');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { query, initDatabase, pool } = require('./db');
-const { INITIAL_BENEFICIARIES, INITIAL_CUSTOM_FIELDS } = require('./initialData');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -56,6 +55,17 @@ function verifySessionToken(token) {
   } catch {
     return null;
   }
+}
+
+function requireStaff(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  const payload = token ? verifySessionToken(token) : null;
+  if (!payload) {
+    return res.status(401).json({ error: 'እባክዎ ይግቡ። ምዝገባ እና መዝገብ ለገቡ ሰራተኞች ብቻ ናቸው።' });
+  }
+  req.staff = payload;
+  next();
 }
 
 // ----------------- Row Mappers (PostgreSQL -> Frontend) -----------------
@@ -170,7 +180,7 @@ function beneficiaryWhere(query) {
 }
 
 // 2. Beneficiaries: GET /api/beneficiaries/stats (aggregates, no row dump)
-app.get('/api/beneficiaries/stats', async (_req, res) => {
+app.get('/api/beneficiaries/stats', requireStaff, async (_req, res) => {
   try {
     const grouped = await query(`
       SELECT
@@ -238,8 +248,174 @@ app.get('/api/beneficiaries/stats', async (_req, res) => {
   }
 });
 
+const REPORT_DIMENSIONS = {
+  woreda: `COALESCE(NULLIF(TRIM(woreda), ''), 'ያልተገለጸ')`,
+  category: `COALESCE(NULLIF(TRIM(category), ''), 'ያልተገለጸ')`,
+  gender: `CASE WHEN gender = 'ወ' THEN 'ወንድ' WHEN gender = 'ሴ' THEN 'ሴት' ELSE 'ያልተገለጸ' END`,
+  health: `CASE
+    WHEN TRIM(health_status) IN ('ጤነኛ', 'አካል ጉዳት', 'ልብ ድካም', 'ታማሚ', 'ውስጥ ደዌ', 'የስኳር ህመም', 'የደም ግፊት')
+      THEN TRIM(health_status)
+    ELSE 'ሌላ'
+  END`,
+  age_band: `CASE
+    WHEN age IS NULL OR age <= 0 THEN 'ያልተገለጸ'
+    WHEN age < 18 THEN 'ከ18 በታች'
+    WHEN age < 30 THEN '18–29'
+    WHEN age < 45 THEN '30–44'
+    WHEN age < 60 THEN '45–59'
+    ELSE '60 እና በላይ'
+  END`,
+  block_zone: `COALESCE(NULLIF(TRIM(block_zone), ''), 'ያልተገለጸ')`,
+  locality: `COALESCE(NULLIF(TRIM(locality), ''), 'ያልተገለጸ')`,
+  aid_type: `COALESCE(NULLIF(TRIM(custom_fields->>'aidType'), ''), 'ያልተሞላ')`,
+  education: `COALESCE(NULLIF(TRIM(custom_fields->>'educationLevel'), ''), 'ያልተሞላ')`,
+  registration_year: `COALESCE(TO_CHAR(registration_date, 'YYYY'), 'ያልተገለጸ')`
+};
+
+const REPORT_METRICS = {
+  count: { expr: 'COUNT(*)::int', kind: 'sum' },
+  family: { expr: 'COALESCE(SUM(family_total), 0)::int', kind: 'sum' },
+  family_male: { expr: 'COALESCE(SUM(family_male), 0)::int', kind: 'sum' },
+  family_female: { expr: 'COALESCE(SUM(family_female), 0)::int', kind: 'sum' },
+  avg_age: { expr: 'ROUND(AVG(NULLIF(age, 0))::numeric, 1)', kind: 'avg' },
+  avg_family: { expr: 'ROUND(AVG(family_total)::numeric, 1)', kind: 'avg' }
+};
+
+function reportDimensionSql(key, values) {
+  if (!key) return null;
+  if (String(key).startsWith('field:')) {
+    const id = String(key).slice(6);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) return null;
+    values.push(id);
+    return `COALESCE(NULLIF(TRIM(custom_fields->>$${values.length}), ''), 'ያልተሞላ')`;
+  }
+  return REPORT_DIMENSIONS[key] || null;
+}
+
+function foldReportParts(parts, kind) {
+  const ranked = [...parts].sort((a, b) => b.people - a.people);
+  if (ranked.length <= 5) return ranked;
+  const keep = ranked.slice(0, 5);
+  const rest = ranked.slice(5);
+  if (kind === 'avg') return keep;
+  const people = rest.reduce((sum, part) => sum + part.people, 0);
+  const value = rest.reduce((sum, part) => sum + part.value, 0);
+  if (people > 0) keep.push({ key: 'ሌሎች', value, people });
+  return keep;
+}
+
+function reportRowTotal(parts, kind) {
+  if (kind === 'avg') {
+    const people = parts.reduce((sum, part) => sum + part.people, 0);
+    if (!people) return 0;
+    return Math.round((parts.reduce((sum, part) => sum + part.value * part.people, 0) / people) * 10) / 10;
+  }
+  return parts.reduce((sum, part) => sum + part.value, 0);
+}
+
+// 2a. Beneficiaries: GET /api/beneficiaries/report (one grouped comparison)
+app.get('/api/beneficiaries/report', requireStaff, async (req, res) => {
+  try {
+    const groupBy = String(req.query.groupBy || 'woreda');
+    const splitBy = String(req.query.splitBy || 'none');
+    const metricKey = REPORT_METRICS[req.query.metric] ? String(req.query.metric) : 'count';
+    const metric = REPORT_METRICS[metricKey];
+    const top = Math.min(20, Math.max(5, parseInt(req.query.top, 10) || 10));
+    const values = [];
+    const groupSql = reportDimensionSql(groupBy, values);
+    const splitSql = splitBy !== 'none' ? reportDimensionSql(splitBy, values) : null;
+
+    if (!groupSql || (splitBy !== 'none' && !splitSql) || groupBy === splitBy) {
+      return res.status(400).json({ error: 'የሪፖርት ምርጫው ትክክል አይደለም' });
+    }
+
+    const result = await query(
+      `
+      SELECT
+        ${groupSql} AS group_label,
+        ${splitSql || `''`} AS split_label,
+        COUNT(*)::int AS people,
+        ${metric.expr} AS metric_value
+      FROM beneficiaries
+      GROUP BY 1, 2;
+      `,
+      values
+    );
+
+    const buckets = new Map();
+    result.rows.forEach((row) => {
+      const label = row.group_label || 'ያልተገለጸ';
+      const key = splitSql ? (row.split_label || 'ያልተገለጸ') : '';
+      const people = Number(row.people) || 0;
+      const value = Number(row.metric_value) || 0;
+      if (!buckets.has(label)) buckets.set(label, { label, people: 0, parts: [] });
+      const bucket = buckets.get(label);
+      bucket.people += people;
+      bucket.parts.push({ key, value, people });
+    });
+
+    let rows = [...buckets.values()].sort((a, b) => b.people - a.people);
+    let truncated = false;
+    if (rows.length > top) {
+      const rest = rows.slice(top);
+      rows = rows.slice(0, top);
+      truncated = true;
+      if (metric.kind === 'sum') {
+        const other = { label: 'ሌሎች', people: 0, parts: [] };
+        rest.forEach((row) => {
+          other.people += row.people;
+          row.parts.forEach((part) => {
+            const existing = other.parts.find((item) => item.key === part.key);
+            if (existing) {
+              existing.value += part.value;
+              existing.people += part.people;
+            } else {
+              other.parts.push({ ...part });
+            }
+          });
+        });
+        if (other.people > 0) rows.push(other);
+      }
+    }
+
+    const shaped = rows.map((row) => {
+      const parts = splitSql
+        ? foldReportParts(row.parts, metric.kind).filter((part) => part.key)
+        : [];
+      const total = splitSql
+        ? reportRowTotal(parts.length ? parts : row.parts, metric.kind)
+        : reportRowTotal(row.parts, metric.kind);
+      return {
+        label: row.label,
+        people: row.people,
+        total,
+        parts: parts.map((part) => ({ key: part.key, value: part.value }))
+      };
+    });
+
+    const series = [];
+    shaped.forEach((row) => {
+      row.parts.forEach((part) => {
+        if (!series.includes(part.key)) series.push(part.key);
+      });
+    });
+
+    res.json({
+      groupBy,
+      splitBy: splitSql ? splitBy : 'none',
+      metric: metricKey,
+      truncated,
+      series,
+      rows: shaped
+    });
+  } catch (err) {
+    console.error('Error building beneficiary report:', err);
+    res.status(500).json({ error: 'ሪፖርቱን ማዘጋጀት አልተቻለም' });
+  }
+});
+
 // 2b. Beneficiaries: GET /api/beneficiaries (one page, plus filters)
-app.get('/api/beneficiaries', async (req, res) => {
+app.get('/api/beneficiaries', requireStaff, async (req, res) => {
   try {
     const { whereClause, values } = beneficiaryWhere(req.query);
     const exportAll = req.query.export === '1';
@@ -286,7 +462,7 @@ app.get('/api/beneficiaries', async (req, res) => {
 });
 
 // 3. Beneficiaries: POST /api/beneficiaries (Register a new beneficiary)
-app.post('/api/beneficiaries', async (req, res) => {
+app.post('/api/beneficiaries', requireStaff, async (req, res) => {
   try {
     const b = req.body;
     if (!b.fullName || !b.faydaId || !b.phone) {
@@ -388,7 +564,7 @@ function normalizeImportCategory(raw) {
 }
 
 // 3b. Beneficiaries: POST /api/beneficiaries/import (bulk Excel import)
-app.post('/api/beneficiaries/import', async (req, res) => {
+app.post('/api/beneficiaries/import', requireStaff, async (req, res) => {
   const incoming = req.body?.records;
   if (!Array.isArray(incoming) || incoming.length === 0) {
     return res.status(400).json({ error: 'የሚገባ መዝገብ አልተገኘም (No records to import)' });
@@ -507,7 +683,7 @@ app.post('/api/beneficiaries/import', async (req, res) => {
 });
 
 // 4. Beneficiaries: PUT /api/beneficiaries/:id (Update beneficiary)
-app.put('/api/beneficiaries/:id', async (req, res) => {
+app.put('/api/beneficiaries/:id', requireStaff, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const b = req.body;
@@ -569,7 +745,7 @@ app.put('/api/beneficiaries/:id', async (req, res) => {
 });
 
 // 5. Beneficiaries: DELETE /api/beneficiaries/:id (Delete beneficiary)
-app.delete('/api/beneficiaries/:id', async (req, res) => {
+app.delete('/api/beneficiaries/:id', requireStaff, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const result = await query('DELETE FROM beneficiaries WHERE id = $1 RETURNING id;', [id]);
@@ -584,7 +760,7 @@ app.delete('/api/beneficiaries/:id', async (req, res) => {
 });
 
 // 6. Custom Fields: GET /api/custom-fields
-app.get('/api/custom-fields', async (req, res) => {
+app.get('/api/custom-fields', requireStaff, async (req, res) => {
   try {
     const result = await query('SELECT * FROM custom_fields ORDER BY sort_order ASC, created_at ASC;');
     res.json(result.rows.map(mapRowToCustomField));
@@ -600,7 +776,7 @@ app.get('/api/custom-fields', async (req, res) => {
 });
 
 // 7. Custom Fields: POST /api/custom-fields
-app.post('/api/custom-fields', async (req, res) => {
+app.post('/api/custom-fields', requireStaff, async (req, res) => {
   try {
     const f = req.body;
     const maxOrder = await query('SELECT COALESCE(MAX(sort_order), 0) + 1 as next_order FROM custom_fields;');
@@ -649,7 +825,7 @@ app.post('/api/custom-fields', async (req, res) => {
 });
 
 // 8. Custom Fields: DELETE /api/custom-fields/:id
-app.delete('/api/custom-fields/:id', async (req, res) => {
+app.delete('/api/custom-fields/:id', requireStaff, async (req, res) => {
   try {
     const id = req.params.id;
     await query('DELETE FROM custom_fields WHERE id = $1;', [id]);
@@ -662,7 +838,7 @@ app.delete('/api/custom-fields/:id', async (req, res) => {
 });
 
 // 9. Custom Fields: PUT /api/custom-fields/reorder
-app.put('/api/custom-fields/reorder', async (req, res) => {
+app.put('/api/custom-fields/reorder', requireStaff, async (req, res) => {
   try {
     const { fieldIds } = req.body;
     if (Array.isArray(fieldIds)) {
@@ -679,41 +855,9 @@ app.put('/api/custom-fields/reorder', async (req, res) => {
   }
 });
 
-// 10. POST /api/reset-demo
-app.post('/api/reset-demo', async (req, res) => {
-  try {
-    await query('TRUNCATE TABLE beneficiaries RESTART IDENTITY;');
-
-    for (const b of INITIAL_BENEFICIARIES) {
-      await query(
-        `
-        INSERT INTO beneficiaries (
-          id, full_name, sub_city, woreda, block_zone, locality, house_no,
-          fayda_id, gender, age, health_status, family_male, family_female,
-          family_total, phone, category, registration_date, custom_fields
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        ON CONFLICT (fayda_id) DO NOTHING;
-        `,
-        [
-          b.id, b.fullName, b.subCity, b.woreda, b.blockZone, b.locality, b.houseNo,
-          b.faydaId, b.gender, b.age, b.healthStatus, b.familyMale, b.familyFemale,
-          b.familyTotal, b.phone, b.category, b.registrationDate || new Date().toISOString().split('T')[0],
-          JSON.stringify(b.customFields || {})
-        ]
-      );
-    }
-
-    await query(`SELECT setval('beneficiaries_id_seq', COALESCE((SELECT MAX(id) FROM beneficiaries), 1));`);
-
-    const records = (await query('SELECT * FROM beneficiaries ORDER BY id DESC;')).rows.map(mapRowToBeneficiary);
-    const fields = (await query('SELECT * FROM custom_fields ORDER BY sort_order ASC;')).rows.map(mapRowToCustomField);
-
-    res.json({ success: true, records, customFields: fields });
-  } catch (err) {
-    console.error('Error resetting demo data:', err);
-    res.status(500).json({ error: 'Failed to reset demo data' });
-  }
+// 10. Reset demo is disabled so the imported registry cannot be wiped from the UI.
+app.post('/api/reset-demo', (_req, res) => {
+  res.status(410).json({ error: 'የናሙና መረጃ መመለስ ተዘግቷል።' });
 });
 
 // 11. Authentication: Login Handler (shared by /api/auth/login and /api/login)

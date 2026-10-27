@@ -220,8 +220,8 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
                 {errors.fullName && <p className="text-xs text-red-600 mt-1">{errors.fullName}</p>}
               </div>
 
-              {/* Gender, Age, Phone in 1 compact row */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Gender, Age, Phone */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {/* Gender */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-800 mb-1">
@@ -367,7 +367,7 @@ export const RegistrationForm: React.FC<RegistrationFormProps> = ({
                   </h3>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-800 mb-1">
                       ክፍለ ከተማ
