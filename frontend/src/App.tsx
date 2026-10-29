@@ -334,7 +334,7 @@ export default function App() {
               <p className="font-bold text-yellow-400">ሃይሌ ጋርመንት · Hayle Garment</p>
               <p className="flex items-start gap-2 text-slate-400">
                 <MapPin className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
-                <span>አዲስ አበባ፣ ንፋስ ስልክ ላፍቶ ክፍለ ከተማ፣ ሃይሌ ጋርመንት አደባባይ፣ ቀበሌ 49</span>
+                <span>አዲስ አበባ፣ ንፋስ ስልክ ላፍቶ ክፍለ ከተማ፣ ሃይሌ ጋርመንት አደባባይ</span>
               </p>
               <p className="flex items-center gap-2 text-slate-400">
                 <Phone className="w-4 h-4 text-yellow-400 shrink-0" />
